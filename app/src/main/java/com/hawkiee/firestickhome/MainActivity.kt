@@ -169,20 +169,20 @@ class MainActivity : Activity() {
         val settings = pill("Settings") { openSettings() }
         top.addView(settings)
 
-        column.addView(top)
+        column.addView(top, fullWidth(0))
 
         // Jump back in: the last three apps opened, whatever they are.
         jumpRow = row()
-        column.addView(section("Jump back in", jumpRow), margins(0, dp(16), 0, 0))
+        column.addView(section("Jump back in", jumpRow), fullWidth(dp(16)))
 
         // Favourites: always in the same place.
         favRow = row()
-        column.addView(section("Favourites", favRow), margins(0, dp(12), 0, 0))
+        column.addView(section("Favourites", favRow), fullWidth(dp(12)))
 
         // Kids.
         kidsRow = row()
         kidsSection = section("Kids", kidsRow)
-        column.addView(kidsSection, margins(0, dp(14), 0, 0))
+        column.addView(kidsSection, fullWidth(dp(12)))
 
         // Everything else, scrolling sideways.
         appsRow = row()
@@ -192,7 +192,7 @@ class MainActivity : Activity() {
         scroller.clipChildren = false
         scroller.clipToPadding = false
         scroller.addView(appsRow)
-        column.addView(section("Apps", scroller), margins(0, dp(14), 0, 0))
+        column.addView(section("Apps", scroller), fullWidth(dp(12)))
 
         return root
     }
@@ -266,14 +266,32 @@ class MainActivity : Activity() {
         val rest = apps.values
             .filter { !used.contains(it.pkg) && !HIDDEN.contains(it.pkg) }
             .sortedBy { it.label.lowercase(Locale.UK) }
-        for (app in rest) {
+        val hiddenByUser = prefs.getStringSet("hidden", emptySet()) ?: emptySet()
+        for (app in rest.filter { !hiddenByUser.contains(it.pkg) }) {
             val view = tile(app.label, null, CARD_DIM, TEXT, 14f) { launch(app.pkg) }
-            appsRow.addView(view, LinearLayout.LayoutParams(dp(132), dp(44)).also { it.marginEnd = dp(10) })
+            view.setOnLongClickListener {
+                val next = HashSet(prefs.getStringSet("hidden", emptySet()) ?: emptySet())
+                next.add(app.pkg)
+                prefs.edit().putStringSet("hidden", next).apply()
+                toast("Hid ${app.label}. Use \"Show hidden\" at the end of Apps to bring it back.")
+                buildRows()
+                true
+            }
+            appsRow.addView(view, LinearLayout.LayoutParams(dp(150), dp(48)).also { it.marginEnd = dp(10) })
         }
         appsRow.addView(
             tile("Settings", null, CARD_DIM, TEXT, 14f) { openSettings() },
-            LinearLayout.LayoutParams(dp(132), dp(44))
+            LinearLayout.LayoutParams(dp(150), dp(48)).also { it.marginEnd = dp(10) }
         )
+        if (hiddenByUser.isNotEmpty()) {
+            appsRow.addView(
+                tile("Show hidden (${hiddenByUser.size})", null, CARD_DIM, MUTED, 14f) {
+                    prefs.edit().remove("hidden").apply()
+                    buildRows()
+                },
+                LinearLayout.LayoutParams(dp(170), dp(48))
+            )
+        }
 
         // Start on the most recently used app, so one press of OK gets you back in.
         jumpRow.getChildAt(0)?.requestFocus()
@@ -399,6 +417,7 @@ class MainActivity : Activity() {
         clockView.text = SimpleDateFormat("HH:mm", Locale.UK).format(now)
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val greeting = when {
+            hour < 5 -> "Late night"
             hour < 12 -> "Morning"
             hour < 18 -> "Afternoon"
             else -> "Evening"
@@ -442,6 +461,12 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- view helpers
 
     private fun dp(v: Int): Int = Math.round(v * resources.displayMetrics.density)
+
+    private fun fullWidth(topMargin: Int): LinearLayout.LayoutParams {
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = topMargin
+        return lp
+    }
 
     private fun margins(start: Int, top: Int, end: Int, bottom: Int): LinearLayout.LayoutParams {
         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -501,7 +526,7 @@ class MainActivity : Activity() {
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
         box.gravity = if (sub != null) Gravity.BOTTOM or Gravity.START else Gravity.CENTER
-        box.setPadding(dp(16), dp(10), dp(16), dp(12))
+        box.setPadding(dp(12), dp(6), dp(12), dp(8))
         box.isFocusable = true
         box.isClickable = true
         box.background = rounded(bg, false)
@@ -514,7 +539,10 @@ class MainActivity : Activity() {
         }
         if (sub != null) box.addView(text(sub, 11f, MUTED))
         val label = text(title, sizeSp, fg, bold = true)
-        if (sub == null) label.gravity = Gravity.CENTER
+        if (sub == null) {
+            label.gravity = Gravity.CENTER
+            label.maxLines = 1
+        }
         box.addView(label)
         return box
     }
