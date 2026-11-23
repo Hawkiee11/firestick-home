@@ -1,6 +1,8 @@
 package com.hawkiee.firestickhome
 
 import android.app.Activity
+import android.app.AppOpsManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -87,11 +89,13 @@ class MainActivity : Activity() {
     private lateinit var dateView: TextView
     private lateinit var weatherView: TextView
     private lateinit var jumpRow: LinearLayout
+    private lateinit var favRow: LinearLayout
     private lateinit var kidsSection: LinearLayout
     private lateinit var kidsRow: LinearLayout
     private lateinit var appsRow: LinearLayout
 
     private var lastWeatherFetch = 0L
+    private var recentTimes: Map<String, Long> = emptyMap()
 
     private val tick = object : Runnable {
         override fun run() {
@@ -167,9 +171,13 @@ class MainActivity : Activity() {
 
         column.addView(top)
 
-        // Jump back in: the three favourites, most recently used first.
+        // Jump back in: the last three apps opened, whatever they are.
         jumpRow = row()
-        column.addView(section("Jump back in", jumpRow), margins(0, dp(18), 0, 0))
+        column.addView(section("Jump back in", jumpRow), margins(0, dp(16), 0, 0))
+
+        // Favourites: always in the same place.
+        favRow = row()
+        column.addView(section("Favourites", favRow), margins(0, dp(12), 0, 0))
 
         // Kids.
         kidsRow = row()
@@ -193,25 +201,47 @@ class MainActivity : Activity() {
         val apps = installedApps()
         val used = HashSet<String>()
 
-        // Jump back in
-        jumpRow.removeAllViews()
         val favs = FAVOURITES.map { w -> Pair(w, find(w, apps)) }
-            .sortedByDescending { p -> lastOpened(p.second) }
+
+        // Jump back in: the last three apps opened, any app at all.
+        // Until there is any history, it shows the favourites instead.
+        jumpRow.removeAllViews()
+        val recent = ArrayList<AppEntry>()
+        for (pkg in recentPackages()) {
+            val app = apps[pkg] ?: continue
+            if (HIDDEN.contains(pkg)) continue
+            recent.add(app)
+            if (recent.size == 3) break
+        }
+        for (p in favs) {
+            if (recent.size == 3) break
+            val app = p.second ?: continue
+            if (recent.none { it.pkg == app.pkg }) recent.add(app)
+        }
+        recent.forEachIndexed { i, app ->
+            val view = tile(app.label, lastOpenedText(app), CARD, TEXT, 22f) { launch(app.pkg) }
+            val lp = LinearLayout.LayoutParams(0, dp(108), 1f)
+            if (i < recent.size - 1) lp.marginEnd = dp(16)
+            jumpRow.addView(view, lp)
+        }
+
+        // Favourites: fixed order, so they're always in the same place.
+        favRow.removeAllViews()
         favs.forEachIndexed { i, p ->
             val w = p.first
             val app = p.second
             val view: View
             if (app == null) {
-                view = tile(w.name, "Not installed", CARD_DIM, MUTED, 22f) {
+                view = tile(w.name, null, CARD_DIM, MUTED, 16f) {
                     toast("${w.name} isn't installed. Get it from the Appstore.")
                 }
             } else {
                 used.add(app.pkg)
-                view = tile(w.name, lastOpenedText(app), CARD, TEXT, 22f) { launch(app.pkg) }
+                view = tile(w.name, null, CARD, TEXT, 16f) { launch(app.pkg) }
             }
-            val lp = LinearLayout.LayoutParams(0, dp(120), 1f)
-            if (i < favs.size - 1) lp.marginEnd = dp(16)
-            jumpRow.addView(view, lp)
+            val lp = LinearLayout.LayoutParams(0, dp(50), 1f)
+            if (i < favs.size - 1) lp.marginEnd = dp(12)
+            favRow.addView(view, lp)
         }
 
         // Kids (only the ones that are installed)
@@ -221,13 +251,13 @@ class MainActivity : Activity() {
         kids.forEachIndexed { i, p ->
             used.add(p.second.pkg)
             val view = tile(p.first.name, null, ACCENT, BG, 16f) { launch(p.second.pkg) }
-            val lp = LinearLayout.LayoutParams(0, dp(54), 1f)
+            val lp = LinearLayout.LayoutParams(0, dp(50), 1f)
             if (i < kids.size - 1) lp.marginEnd = dp(12)
             kidsRow.addView(view, lp)
         }
         // Keep the row evenly sized when there are only one or two kids' apps.
         for (j in kids.size until 4) {
-            kidsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(54), 1f).also { it.marginStart = dp(12) })
+            kidsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(50), 1f).also { it.marginStart = dp(12) })
         }
         kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
 
@@ -304,7 +334,47 @@ class MainActivity : Activity() {
 
     private fun lastOpened(app: AppEntry?): Long {
         if (app == null) return -1L
-        return prefs.getLong("last_${app.pkg}", 0L)
+        return recentTimes[app.pkg] ?: prefs.getLong("last_${app.pkg}", 0L)
+    }
+
+    /**
+     * Apps by when they were last opened, newest first.
+     * Always knows about apps opened from this screen. If usage access has been granted
+     * (one ADB command, see README), it also sees apps opened any other way.
+     */
+    private fun recentPackages(): List<String> {
+        val times = HashMap<String, Long>()
+        for ((key, value) in prefs.all) {
+            if (key.startsWith("last_") && value is Long) times[key.removePrefix("last_")] = value
+        }
+        if (hasUsageAccess()) {
+            try {
+                val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+                val now = System.currentTimeMillis()
+                val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_BEST, now - 14L * 24L * 3600L * 1000L, now)
+                for (st in stats) {
+                    if (st.totalTimeInForeground <= 0L) continue
+                    val before = times[st.packageName] ?: 0L
+                    if (st.lastTimeUsed > before) times[st.packageName] = st.lastTimeUsed
+                }
+            } catch (e: Exception) {
+                // Fall back to what this screen knows.
+            }
+        }
+        times.remove(packageName)
+        recentTimes = times
+        return times.entries.sortedByDescending { it.value }.map { it.key }
+    }
+
+    private fun hasUsageAccess(): Boolean {
+        return try {
+            val ops = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+            @Suppress("DEPRECATION")
+            val mode = ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), packageName)
+            mode == AppOpsManager.MODE_ALLOWED
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun lastOpenedText(app: AppEntry): String {

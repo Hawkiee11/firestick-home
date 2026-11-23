@@ -3,8 +3,9 @@
 A simple home screen for a Fire TV Stick 4K Max (2nd gen, Fire OS 8). One screen, no scrolling for the
 things used most:
 
-- **Jump back in**: Netflix, NOW and YouTube, with the one you opened last first and already selected.
-  One press of OK gets you back to it.
+- **Jump back in**: the last three apps you opened, whatever they are, newest first and already
+  selected. One press of OK gets you back to it.
+- **Favourites**: Netflix, NOW and YouTube, always in the same place.
 - **Kids**: CBeebies, YouTube Kids, BBC iPlayer and Disney+, whichever are installed.
 - **Apps**: everything else, scrolling sideways, plus Settings.
 - Clock, date, a greeting and the weather for Stratford-upon-Avon (Open-Meteo, no account).
@@ -23,6 +24,16 @@ of Amazon's apps row and it's one click from Home.
 
 Updates: every push to `main` builds a new APK into the same link. Download it again and install over
 the top; your recents are kept.
+
+## Optional: see apps opened from anywhere
+
+Out of the box, Jump back in only knows about apps opened from Family Hub. To include apps opened any
+other way (Alexa, Amazon's home), grant usage access once from a computer:
+
+```bash
+adb connect <stick-ip>:5555
+adb shell appops set com.hawkiee.firestickhome GET_USAGE_STATS allow
+```
 
 ## Build
 
