@@ -535,7 +535,7 @@ class MainActivity : Activity() {
         val groups = LinkedHashMap<String, ArrayList<View>>()
         for (g in GROUP_ORDER) groups[g] = ArrayList()
         for (app in visible.sortedBy { it.label.lowercase(Locale.UK) }) {
-            groups.getValue(groupOf(app)).add(artTile(app))
+            groups.getValue(groupOf(app)).add(artTile(app, showLock = true))
         }
         val tools = groups.getValue(G_TOOLS)
         tools.add(tile("Fire TV settings", CARD_DIM, TEXT) { openSettings() })
@@ -543,7 +543,7 @@ class MainActivity : Activity() {
         val hiddenTitle = "Hidden"
         groups[hiddenTitle] = ArrayList()
         for (app in hiddenApps) {
-            groups.getValue(hiddenTitle).add(artTile(app, dim = true, onClick = { showHiddenMenu(app) }))
+            groups.getValue(hiddenTitle).add(artTile(app, dim = true, onClick = { showHiddenMenu(app) }, showLock = true))
         }
         for ((title, views) in groups) {
             if (views.isEmpty()) continue
@@ -670,7 +670,7 @@ class MainActivity : Activity() {
         }
 
         AlertDialog.Builder(this)
-            .setTitle(app.label)
+            .setTitle(if (isBuiltIn(app)) "${app.label}  ·  built in, can hide but not uninstall" else app.label)
             .setItems(labels.toTypedArray()) { _, which ->
                 actions[which]()
                 buildRows()
@@ -712,7 +712,7 @@ class MainActivity : Activity() {
             actions.add { uninstall(app) }
         }
         AlertDialog.Builder(this)
-            .setTitle(app.label + " (hidden)")
+            .setTitle(if (isBuiltIn(app)) "${app.label}  ·  hidden, built in" else "${app.label}  ·  hidden")
             .setItems(labels.toTypedArray()) { _, which ->
                 actions[which]()
                 buildRows()
@@ -1553,6 +1553,23 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Amazon's built-in apps: Fire OS lets them be hidden, not uninstalled. */
+    private fun isBuiltIn(app: AppEntry): Boolean =
+        (app.info.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+
+    private fun lockBadge(): ImageView {
+        val img = ImageView(this)
+        img.setImageResource(R.drawable.ic_lock)
+        img.setColorFilter(Color.WHITE)
+        img.setPadding(dp(4), dp(4), dp(4), dp(4))
+        val bg = GradientDrawable()
+        bg.shape = GradientDrawable.OVAL
+        bg.setColor(Color.argb(170, 0, 0, 0))
+        img.background = bg
+        img.contentDescription = "Built in: can be hidden, not uninstalled"
+        return img
+    }
+
     private fun newBadge(): TextView {
         val t = text("NEW", 9f, BG, bold = true)
         t.setPadding(dp(6), dp(1), dp(6), dp(1))
@@ -1819,7 +1836,7 @@ class MainActivity : Activity() {
      * A 16:9 tile filled edge to edge by the app's banner. Apps without one get their icon
      * and name instead. The 3 dp inset leaves room for the white focus ring.
      */
-    private fun artTile(app: AppEntry, dim: Boolean = false, onClick: (() -> Unit)? = null): View {
+    private fun artTile(app: AppEntry, dim: Boolean = false, onClick: (() -> Unit)? = null, showLock: Boolean = false): View {
         val open = onClick ?: { launch(app.pkg) }
         val hold: () -> Unit = onClick ?: { showAppMenu(app) }
         val banner = bannerOf(app)
@@ -1832,6 +1849,9 @@ class MainActivity : Activity() {
             img.clipToOutline = true
             img.background = rounded(Color.TRANSPARENT, false, 9)
             box.addView(img, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            if (showLock && isBuiltIn(app)) box.addView(lockBadge(), FrameLayout.LayoutParams(
+                dp(20), dp(20), Gravity.BOTTOM or Gravity.START
+            ).also { it.bottomMargin = dp(5); it.leftMargin = dp(5) })
             if (isNew(app)) box.addView(newBadge(), FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END
             ).also { it.topMargin = dp(6); it.rightMargin = dp(6) })
@@ -1855,6 +1875,7 @@ class MainActivity : Activity() {
         label.maxLines = 1
         label.gravity = Gravity.CENTER
         box.addView(label, margins(0, dp(4), 0, 0))
+        if (showLock && isBuiltIn(app)) box.addView(lockBadge(), LinearLayout.LayoutParams(dp(16), dp(16)).also { it.topMargin = dp(2) })
         box.contentDescription = app.label
         box.tag = app.pkg
         makeTile(box, CARD, 12, open, hold, dim)
