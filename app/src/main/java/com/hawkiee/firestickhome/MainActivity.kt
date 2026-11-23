@@ -1008,10 +1008,19 @@ class MainActivity : Activity() {
             "After the PIN, stay unlocked for: ${prefs.getInt("unlock_minutes", 30)} min" to { pickUnlockMinutes() },
             (if (hasPin()) "Change PIN" else "Set a PIN") to { setNewPin { showKidsDialog() } },
         )
+        // A dialog can show a message or a list, not both, so the explanation is its own item.
+        val all = items + listOf<Pair<String, () -> Unit>>(
+            "How kids time works" to {
+                AlertDialog.Builder(this)
+                    .setTitle("How kids time works")
+                    .setMessage("In kids time the Kids row comes first. With the PIN lock on, anything outside the Kids group, the hold-OK menus and settings need the PIN. Outside kids time nothing is locked.")
+                    .setPositiveButton("OK") { _, _ -> showKidsDialog() }
+                    .show()
+            }
+        )
         AlertDialog.Builder(this)
             .setTitle("Kids time & PIN")
-            .setMessage("In kids time the Kids row comes first. With the PIN lock on, anything outside the Kids group (and settings) needs the PIN. Outside kids time nothing is locked.")
-            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
+            .setItems(all.map { it.first }.toTypedArray()) { _, which -> all[which].second() }
             .setNegativeButton("Done") { _, _ -> buildRows() }
             .show()
     }
