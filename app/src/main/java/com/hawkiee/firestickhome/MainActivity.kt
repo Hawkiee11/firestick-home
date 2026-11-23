@@ -1,17 +1,23 @@
 package com.hawkiee.firestickhome
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.AppOpsManager
+import android.app.PendingIntent
 import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInstaller
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -25,8 +31,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
-import android.widget.ScrollView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
@@ -41,11 +47,10 @@ import java.util.Locale
 data class AppEntry(val pkg: String, val label: String, val info: ActivityInfo)
 
 /**
- * An app we want on the home screen. Matched by package name first, then by its label,
+ * An app we want by default. Matched by package name first, then by its label,
  * because the same app can have different package names on different devices.
- * [loose] = the label only has to contain one of [labels]; otherwise it must match exactly.
  */
-data class Wanted(val name: String, val pkgs: List<String>, val labels: List<String>, val loose: Boolean)
+data class Wanted(val pkgs: List<String>, val labels: List<String>)
 
 class MainActivity : Activity() {
 
@@ -57,25 +62,19 @@ class MainActivity : Activity() {
             "https://api.open-meteo.com/v1/forecast?latitude=52.19&longitude=-1.71&current=temperature_2m,weather_code&timezone=Europe%2FLondon"
         const val WEATHER_REFRESH_MS = 30L * 60L * 1000L
 
-        val FAVOURITES = listOf(
-            Wanted("Netflix", listOf("com.netflix.ninja"), listOf("netflix"), loose = false),
-            Wanted("NOW", listOf("com.nowtv.ui", "com.nowtv.ui.firetv"), listOf("now", "now tv"), loose = false),
-            Wanted(
-                "YouTube",
-                listOf("com.amazon.firetv.youtube", "com.google.android.youtube.tv"),
-                listOf("youtube"),
-                loose = false
-            ),
+        // In-app updates come from this repo's "latest" release (the repo must be public).
+        const val RELEASE_URL = "https://api.github.com/repos/Hawkiee11/firestick-home/releases/tags/latest"
+        const val UPDATE_CHECK_MS = 6L * 60L * 60L * 1000L
+        const val ACTION_INSTALL_STATUS = "com.hawkiee.firestickhome.INSTALL_STATUS"
+
+        // The Favourites row on first run. After that, the hold-OK menu edits it.
+        val DEFAULT_FAVOURITES = listOf(
+            Wanted(listOf("com.netflix.ninja"), listOf("netflix")),
+            Wanted(listOf("com.nowtv.ui", "com.nowtv.ui.firetv"), listOf("now", "now tv")),
+            Wanted(listOf("com.amazon.firetv.youtube", "com.google.android.youtube.tv"), listOf("youtube")),
         )
 
-        val KIDS = listOf(
-            Wanted("CBeebies", emptyList(), listOf("cbeebies"), loose = true),
-            Wanted("YouTube Kids", listOf("com.amazon.firetv.youtube.kids"), listOf("youtube kids"), loose = true),
-            Wanted("BBC iPlayer", listOf("uk.co.bbc.iplayer"), listOf("iplayer"), loose = true),
-            Wanted("Disney+", listOf("com.disney.disneyplus"), listOf("disney+"), loose = true),
-        )
-
-        // App drawer groups, in the order they appear.
+        // App drawer groups, in the order they appear. The Kids row on Home shows the Kids group.
         const val G_STREAM = "Streaming"
         const val G_KIDS = "Kids"
         const val G_MUSIC = "Music & audio"
@@ -86,7 +85,7 @@ class MainActivity : Activity() {
         val GROUP_ORDER = listOf(G_STREAM, G_KIDS, G_MUSIC, G_GAMES, G_TOOLS, G_AMAZON, G_OTHER)
 
         // Matched against the app's name (lower case). First match wins, in the order of groupOf().
-        val KIDS_WORDS = listOf("kids", "cbeebies", "cbbc", "nick jr", "pbs kids")
+        val KIDS_WORDS = listOf("kids", "cbeebies", "cbbc", "nick jr", "pbs kids", "disney+", "iplayer")
         val MUSIC_WORDS = listOf("spotify", "music", "audible", "bbc sounds", "tunein", "podcast", "deezer", "tidal", "radio")
         val GAME_WORDS = listOf("luna", "game", "xbox", "geforce", "steam link", "arcade")
         val STREAM_WORDS = listOf(
@@ -100,6 +99,10 @@ class MainActivity : Activity() {
         // Things that should never appear as a tile.
         val HIDDEN = setOf("com.amazon.tv.launcher")
 
+        // The Kids row goes above Favourites between these hours.
+        const val KIDS_FIRST_FROM = 6
+        const val KIDS_FIRST_UNTIL = 19
+
         // Colours from the Family Hub+ design.
         val BG = Color.parseColor("#14161F")
         val CARD = Color.parseColor("#262A3A")
@@ -107,32 +110,67 @@ class MainActivity : Activity() {
         val TEXT = Color.parseColor("#F4F1EA")
         val MUTED = Color.parseColor("#C9C3B6")
         val ACCENT = Color.parseColor("#F3C98B")
+
+        // App tiles are the same shape as the apps' TV banners (16:9), so the art fills them.
+        const val ART_W = 156
+        const val ART_H = 88
     }
 
     private val main = Handler(Looper.getMainLooper())
     private lateinit var prefs: SharedPreferences
 
+    private lateinit var homeColumn: LinearLayout
     private lateinit var clockView: TextView
     private lateinit var dateView: TextView
     private lateinit var weatherView: TextView
+    private lateinit var updatePill: TextView
     private lateinit var jumpRow: LinearLayout
+    private lateinit var favSection: LinearLayout
     private lateinit var favRow: LinearLayout
     private lateinit var kidsSection: LinearLayout
     private lateinit var kidsRow: LinearLayout
     private lateinit var allPanel: LinearLayout
     private lateinit var allGrid: LinearLayout
-    private var allAppsTile: View? = null
     private var firstGridRow: LinearLayout? = null
-    private lateinit var homeColumn: LinearLayout
 
-    private var lastWeatherFetch = 0L
+    private var apps: Map<String, AppEntry> = emptyMap()
     private var recentTimes: Map<String, Long> = emptyMap()
+    private var lastWeatherFetch = 0L
+    private var lastUpdateCheck = 0L
+    private var updateUrl: String? = null
 
     private val tick = object : Runnable {
         override fun run() {
             updateClock()
-            if (System.currentTimeMillis() - lastWeatherFetch > WEATHER_REFRESH_MS) fetchWeather()
+            val now = System.currentTimeMillis()
+            if (now - lastWeatherFetch > WEATHER_REFRESH_MS) fetchWeather()
+            if (now - lastUpdateCheck > UPDATE_CHECK_MS) checkForUpdate()
             main.postDelayed(this, 15_000L)
+        }
+    }
+
+    // Results from the system installer when an update is installed.
+    private val installReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
+                PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                    @Suppress("DEPRECATION")
+                    val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                    if (confirm != null) {
+                        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            startActivity(confirm)
+                        } catch (e: Exception) {
+                            toast("Couldn't start the installer.")
+                        }
+                    }
+                }
+                PackageInstaller.STATUS_SUCCESS -> toast("Updated.")
+                else -> {
+                    val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""
+                    toast("The update didn't install. $msg")
+                }
+            }
         }
     }
 
@@ -143,6 +181,21 @@ class MainActivity : Activity() {
         prefs = getSharedPreferences("home", Context.MODE_PRIVATE)
         window.decorView.setBackgroundColor(BG)
         setContentView(buildScreen())
+        val filter = IntentFilter(ACTION_INSTALL_STATUS)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(installReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(installReceiver, filter)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(installReceiver)
+        } catch (e: Exception) {
+            // Already gone.
+        }
     }
 
     override fun onResume() {
@@ -159,278 +212,13 @@ class MainActivity : Activity() {
         main.removeCallbacks(tick)
     }
 
-    // This is a home screen: Back has nowhere to go.
+    // This is a home screen: Back only closes the drawer.
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_BACK) {
             if (allPanel.visibility == View.VISIBLE) closeAllApps()
             return true
         }
         return super.onKeyDown(keyCode, event)
-    }
-
-    // ---------------------------------------------------------------- layout
-
-    private fun buildScreen(): View {
-        val root = FrameLayout(this)
-        root.setBackgroundColor(BG)
-        root.clipChildren = false
-
-        val column = LinearLayout(this)
-        homeColumn = column
-        column.orientation = LinearLayout.VERTICAL
-        column.clipChildren = false
-        column.clipToPadding = false
-        column.setPadding(dp(40), dp(24), dp(40), dp(20))
-        root.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-
-        // Top bar: clock, date and greeting, weather, settings.
-        val top = LinearLayout(this)
-        top.orientation = LinearLayout.HORIZONTAL
-        top.gravity = Gravity.CENTER_VERTICAL
-        top.clipChildren = false
-
-        clockView = text("--:--", 34f, TEXT, light = true)
-        top.addView(clockView)
-
-        dateView = text("", 14f, MUTED)
-        top.addView(dateView, margins(dp(14), 0, dp(14), 0))
-
-        weatherView = text("Stratford", 13f, TEXT)
-        weatherView.background = rounded(CARD_DIM, false, 999)
-        weatherView.setPadding(dp(12), dp(6), dp(12), dp(6))
-        top.addView(weatherView)
-
-        val spacer = View(this)
-        top.addView(spacer, LinearLayout.LayoutParams(0, 1, 1f))
-
-        val settings = pill("Settings") { openSettings() }
-        top.addView(settings)
-
-        column.addView(top, fullWidth(0))
-
-        // Jump back in: the last three apps opened, whatever they are.
-        jumpRow = row()
-        column.addView(section("Jump back in", jumpRow), fullWidth(dp(16)))
-
-        // Favourites: always in the same place.
-        favRow = row()
-        column.addView(section("Favourites", favRow), fullWidth(dp(10)))
-
-        // Kids.
-        kidsRow = row()
-        kidsSection = section("Kids", kidsRow)
-        column.addView(kidsSection, fullWidth(dp(10)))
-
-        // Push the drawer handle to the bottom of the screen.
-        column.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
-
-        // Drawer handle: landing on it (pressing down from the last row) slides the app drawer up.
-        val handle = text("↓   All apps", 14f, MUTED, bold = true)
-        handle.gravity = Gravity.CENTER
-        handle.setPadding(dp(18), dp(8), dp(18), dp(8))
-        handle.isFocusable = true
-        handle.isClickable = true
-        handle.background = rounded(BG, false, 999)
-        handle.setOnClickListener { openAllApps() }
-        handle.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) openAllApps() }
-        allAppsTile = handle
-        val handleLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        handleLp.gravity = Gravity.CENTER_HORIZONTAL
-        column.addView(handle, handleLp)
-
-        // All apps: a full-screen grid on top, closed with Back.
-        allPanel = LinearLayout(this)
-        allPanel.orientation = LinearLayout.VERTICAL
-        allPanel.setBackgroundColor(BG)
-        allPanel.setPadding(dp(40), dp(24), dp(40), dp(0))
-        allPanel.visibility = View.GONE
-        allPanel.clipChildren = false
-        val head = text("All apps", 22f, TEXT, bold = true)
-        allPanel.addView(head)
-        allPanel.addView(text("Grouped, A–Z  ·  Hold OK on an app to hide it  ·  Up or Back to close", 12f, MUTED), fullWidth(dp(2)))
-        allGrid = LinearLayout(this)
-        allGrid.orientation = LinearLayout.VERTICAL
-        allGrid.clipChildren = false
-        allGrid.clipToPadding = false
-        allGrid.setPadding(dp(6), dp(12), dp(6), dp(24))
-        val gridScroll = ScrollView(this)
-        gridScroll.isVerticalScrollBarEnabled = false
-        gridScroll.clipChildren = false
-        gridScroll.clipToPadding = false
-        gridScroll.addView(allGrid)
-        allPanel.addView(gridScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).also { it.topMargin = dp(8) })
-        root.addView(allPanel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-
-        return root
-    }
-
-    private fun buildRows() {
-        val apps = installedApps()
-        val used = HashSet<String>()
-
-        val favs = FAVOURITES.map { w -> Pair(w, find(w, apps)) }
-
-        // Jump back in: the last three apps opened, any app at all.
-        // Until there is any history, it shows the favourites instead.
-        jumpRow.removeAllViews()
-        val recent = ArrayList<AppEntry>()
-        for (pkg in recentPackages()) {
-            val app = apps[pkg] ?: continue
-            if (HIDDEN.contains(pkg)) continue
-            recent.add(app)
-            if (recent.size == 3) break
-        }
-        for (p in favs) {
-            if (recent.size == 3) break
-            val app = p.second ?: continue
-            if (recent.none { it.pkg == app.pkg }) recent.add(app)
-        }
-        recent.forEachIndexed { i, app ->
-            val view = jumpTile(app)
-            val lp = LinearLayout.LayoutParams(0, dp(104), 1f)
-            if (i < recent.size - 1) lp.marginEnd = dp(16)
-            jumpRow.addView(view, lp)
-        }
-
-        // Favourites: fixed order, so they're always in the same place.
-        favRow.removeAllViews()
-        favs.forEachIndexed { i, p ->
-            val w = p.first
-            val app = p.second
-            val view: View
-            if (app == null) {
-                view = tile(w.name + " · not installed", null, CARD_DIM, MUTED, 14f) {
-                    toast("${w.name} isn't installed. Get it from the Appstore.")
-                }
-            } else {
-                used.add(app.pkg)
-                view = artTile(app, CARD)
-            }
-            val lp = LinearLayout.LayoutParams(0, dp(68), 1f)
-            if (i < favs.size - 1) lp.marginEnd = dp(12)
-            favRow.addView(view, lp)
-        }
-
-        // Kids (only the ones that are installed)
-        kidsRow.removeAllViews()
-        val kids = KIDS.mapNotNull { w -> find(w, apps)?.let { Pair(w, it) } }
-            .filter { !used.contains(it.second.pkg) }
-        kids.forEachIndexed { i, p ->
-            used.add(p.second.pkg)
-            val view = artTile(p.second, ACCENT)
-            val lp = LinearLayout.LayoutParams(0, dp(68), 1f)
-            if (i < kids.size - 1) lp.marginEnd = dp(12)
-            kidsRow.addView(view, lp)
-        }
-        // Keep the row evenly sized when there are only one or two kids' apps.
-        for (j in kids.size until 4) {
-            kidsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(68), 1f).also { it.marginStart = dp(12) })
-        }
-        kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
-
-        // Apps
-        // The app drawer: every app, A–Z, including the ones on the home screen.
-        val hiddenByUser = prefs.getStringSet("hidden", emptySet()) ?: emptySet()
-        val rest = apps.values
-            .filter { !HIDDEN.contains(it.pkg) && !hiddenByUser.contains(it.pkg) }
-            .sortedBy { it.label.lowercase(Locale.UK) }
-
-        // The drawer, grouped (Streaming, Kids, Music…), A–Z within each group, five per row.
-        allGrid.removeAllViews()
-        firstGridRow = null
-        val groups = LinkedHashMap<String, ArrayList<View>>()
-        for (g in GROUP_ORDER) groups[g] = ArrayList()
-        for (app in rest) groups.getValue(groupOf(app)).add(appTile(app))
-        val tools = groups.getValue(G_TOOLS)
-        tools.add(tile("Settings", null, CARD_DIM, TEXT, 14f) { openSettings() })
-        if (hiddenByUser.isNotEmpty()) {
-            tools.add(tile("Show hidden (${hiddenByUser.size})", null, CARD_DIM, MUTED, 14f) {
-                prefs.edit().remove("hidden").apply()
-                buildRows()
-            })
-        }
-        for ((title, views) in groups) {
-            if (views.isEmpty()) continue
-            val heading = text(title, 15f, TEXT, bold = true)
-            allGrid.addView(heading, fullWidth(if (allGrid.childCount == 0) 0 else dp(22)))
-            var gridRow: LinearLayout? = null
-            views.forEachIndexed { i, v ->
-                if (i % 5 == 0) {
-                    val r = row()
-                    allGrid.addView(r, fullWidth(dp(10)))
-                    if (firstGridRow == null) firstGridRow = r
-                    gridRow = r
-                }
-                gridRow?.addView(v, LinearLayout.LayoutParams(0, dp(80), 1f).also { if (i % 5 != 4) it.marginEnd = dp(14) })
-            }
-            val leftover = views.size % 5
-            if (leftover != 0) {
-                for (j in leftover until 5) {
-                    gridRow?.addView(View(this), LinearLayout.LayoutParams(0, dp(80), 1f).also { if (j != 4) it.marginEnd = dp(14) })
-                }
-            }
-        }
-
-        if (allPanel.visibility == View.VISIBLE) {
-            firstGridTile()?.requestFocus()
-        } else {
-            // Start on the most recently used app, so one press of OK gets you back in.
-            jumpRow.getChildAt(0)?.requestFocus()
-        }
-    }
-
-    /** An app tile: OK opens it, holding OK hides it. */
-    private fun appTile(app: AppEntry): View {
-        val view = artTile(app, CARD_DIM)
-        view.setOnLongClickListener {
-            val next = HashSet(prefs.getStringSet("hidden", emptySet()) ?: emptySet())
-            next.add(app.pkg)
-            prefs.edit().putStringSet("hidden", next).apply()
-            toast("Hid ${app.label}. \"Show hidden\" at the end of All apps brings it back.")
-            buildRows()
-            true
-        }
-        return view
-    }
-
-    private fun firstGridTile(): View? = firstGridRow?.getChildAt(0)
-
-    /** Which drawer group an app belongs in: by name first, then by the category the app declares. */
-    private fun groupOf(app: AppEntry): String {
-        val l = app.label.lowercase(Locale.UK).trim()
-        fun has(words: List<String>) = words.any { l.contains(it) }
-        if (has(KIDS_WORDS)) return G_KIDS
-        if (has(MUSIC_WORDS)) return G_MUSIC
-        if (has(GAME_WORDS)) return G_GAMES
-        if (l == "now" || l.startsWith("now ") || has(STREAM_WORDS)) return G_STREAM
-        if (has(TOOL_WORDS)) return G_TOOLS
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            when (app.info.applicationInfo.category) {
-                ApplicationInfo.CATEGORY_VIDEO -> return G_STREAM
-                ApplicationInfo.CATEGORY_AUDIO -> return G_MUSIC
-                ApplicationInfo.CATEGORY_GAME -> return G_GAMES
-                ApplicationInfo.CATEGORY_PRODUCTIVITY -> return G_TOOLS
-            }
-        }
-        if (app.pkg.startsWith("com.amazon.")) return G_AMAZON
-        return G_OTHER
-    }
-
-    private fun openAllApps() {
-        if (allPanel.visibility == View.VISIBLE) return
-        allPanel.visibility = View.VISIBLE
-        // Keep the remote inside the drawer while it's open.
-        homeColumn.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-        val h = resources.displayMetrics.heightPixels.toFloat()
-        allPanel.translationY = h
-        allPanel.animate().translationY(0f).setDuration(220L).start()
-        firstGridTile()?.requestFocus()
-    }
-
-    /** The bottom-most visible tile on the home screen, where focus lands when the drawer closes. */
-    private fun lastHomeTile(): View? {
-        if (kidsSection.visibility == View.VISIBLE && kidsRow.childCount > 0) return kidsRow.getChildAt(0)
-        return favRow.getChildAt(0) ?: jumpRow.getChildAt(0)
     }
 
     // Up from the drawer's first row closes it.
@@ -449,14 +237,326 @@ class MainActivity : Activity() {
         return super.dispatchKeyEvent(event)
     }
 
+    // ---------------------------------------------------------------- layout
+
+    private fun buildScreen(): View {
+        val root = FrameLayout(this)
+        root.setBackgroundColor(BG)
+        root.clipChildren = false
+
+        val column = LinearLayout(this)
+        homeColumn = column
+        column.orientation = LinearLayout.VERTICAL
+        column.clipChildren = false
+        column.clipToPadding = false
+        column.setPadding(dp(40), dp(22), dp(40), dp(14))
+        root.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // Top bar: clock, date and greeting, weather, update, settings.
+        val top = LinearLayout(this)
+        top.orientation = LinearLayout.HORIZONTAL
+        top.gravity = Gravity.CENTER_VERTICAL
+        top.clipChildren = false
+
+        clockView = text("--:--", 34f, TEXT, light = true)
+        top.addView(clockView)
+
+        dateView = text("", 14f, MUTED)
+        top.addView(dateView, margins(dp(14), 0, dp(14), 0))
+
+        weatherView = text("Stratford", 13f, TEXT)
+        weatherView.background = rounded(CARD_DIM, false, 999)
+        weatherView.setPadding(dp(12), dp(6), dp(12), dp(6))
+        top.addView(weatherView)
+
+        top.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+
+        updatePill = pill("Update ready", ACCENT, BG) { installUpdate() }
+        updatePill.visibility = View.GONE
+        top.addView(updatePill, margins(0, 0, dp(10), 0))
+
+        top.addView(pill("Settings", CARD, TEXT) { openSettings() })
+
+        column.addView(top, fullWidth(0))
+
+        // Jump back in: the last three apps opened, whatever they are.
+        jumpRow = row()
+        column.addView(section("Jump back in", jumpRow), fullWidth(dp(14)))
+
+        // Favourites and Kids. Their order changes with the time of day (see orderRows).
+        favRow = row()
+        favSection = section("Favourites", favRow)
+        column.addView(favSection, fullWidth(dp(10)))
+
+        kidsRow = row()
+        kidsSection = section("Kids", kidsRow)
+        column.addView(kidsSection, fullWidth(dp(10)))
+
+        // Push the drawer handle to the bottom of the screen.
+        column.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
+
+        // Drawer handle: landing on it (pressing down from the last row) slides the app drawer up.
+        val handle = text("↓   All apps", 14f, MUTED, bold = true)
+        handle.gravity = Gravity.CENTER
+        handle.setPadding(dp(18), dp(6), dp(18), dp(6))
+        handle.isFocusable = true
+        handle.isClickable = true
+        handle.setOnClickListener { openAllApps() }
+        handle.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) openAllApps() }
+        val handleLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        handleLp.gravity = Gravity.CENTER_HORIZONTAL
+        column.addView(handle, handleLp)
+
+        // The app drawer: a full-screen panel on top, closed with Up or Back.
+        allPanel = LinearLayout(this)
+        allPanel.orientation = LinearLayout.VERTICAL
+        allPanel.setBackgroundColor(BG)
+        allPanel.setPadding(dp(40), dp(22), dp(40), 0)
+        allPanel.visibility = View.GONE
+        allPanel.clipChildren = false
+        allPanel.addView(text("All apps", 22f, TEXT, bold = true))
+        allPanel.addView(
+            text("Hold OK on an app for options  ·  Up or Back to close", 12f, MUTED),
+            fullWidth(dp(2))
+        )
+        allGrid = LinearLayout(this)
+        allGrid.orientation = LinearLayout.VERTICAL
+        allGrid.clipChildren = false
+        allGrid.clipToPadding = false
+        allGrid.setPadding(dp(6), dp(10), dp(6), dp(24))
+        val gridScroll = ScrollView(this)
+        gridScroll.isVerticalScrollBarEnabled = false
+        gridScroll.clipChildren = false
+        gridScroll.clipToPadding = false
+        gridScroll.addView(allGrid)
+        allPanel.addView(
+            gridScroll,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).also { it.topMargin = dp(6) }
+        )
+        root.addView(allPanel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        return root
+    }
+
+    private fun buildRows() {
+        apps = installedApps()
+        val hiddenByUser = hiddenSet()
+        val visible = apps.values.filter { !HIDDEN.contains(it.pkg) && !hiddenByUser.contains(it.pkg) }
+
+        // Jump back in: the last three apps opened, any app at all.
+        // Until there is any history, it shows the favourites instead.
+        jumpRow.removeAllViews()
+        val favs = favourites().mapNotNull { apps[it] }
+        val recent = ArrayList<AppEntry>()
+        for (pkg in recentPackages()) {
+            val app = apps[pkg] ?: continue
+            if (HIDDEN.contains(pkg)) continue
+            recent.add(app)
+            if (recent.size == 3) break
+        }
+        for (app in favs) {
+            if (recent.size == 3) break
+            if (recent.none { it.pkg == app.pkg }) recent.add(app)
+        }
+        recent.forEachIndexed { i, app ->
+            val lp = LinearLayout.LayoutParams(0, dp(100), 1f)
+            if (i < recent.size - 1) lp.marginEnd = dp(16)
+            jumpRow.addView(jumpTile(app), lp)
+        }
+
+        // Favourites: up to five, in the order you set.
+        fillArtRow(favRow, favs.take(5), "Hold OK on any app and choose \"Add to Favourites\"")
+
+        // Kids: the apps in the Kids group, most recently used first.
+        val kids = visible.filter { groupOf(it) == G_KIDS }
+            .sortedWith(compareByDescending<AppEntry> { lastOpened(it) }.thenBy { it.label.lowercase(Locale.UK) })
+        fillArtRow(kidsRow, kids.take(5), null)
+        kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
+
+        orderRows()
+        buildDrawer(visible, hiddenByUser.size)
+
+        if (allPanel.visibility == View.VISIBLE) {
+            firstGridTile()?.requestFocus()
+        } else {
+            // Start on the most recently used app, so one press of OK gets you back in.
+            jumpRow.getChildAt(0)?.requestFocus()
+        }
+    }
+
+    /** A row of banner tiles, left-aligned; [emptyHint] shows when there are none. */
+    private fun fillArtRow(r: LinearLayout, list: List<AppEntry>, emptyHint: String?) {
+        r.removeAllViews()
+        if (list.isEmpty() && emptyHint != null) {
+            r.addView(text(emptyHint, 13f, MUTED), margins(0, dp(8), 0, dp(8)))
+            return
+        }
+        for (app in list) {
+            r.addView(artTile(app), LinearLayout.LayoutParams(dp(ART_W), dp(ART_H)).also { it.marginEnd = dp(16) })
+        }
+    }
+
+    /** Kids above Favourites in the daytime, below in the evening. */
+    private fun orderRows() {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val kidsFirst = hour in KIDS_FIRST_FROM until KIDS_FIRST_UNTIL
+        val favIndex = homeColumn.indexOfChild(favSection)
+        val kidsIndex = homeColumn.indexOfChild(kidsSection)
+        val wantSwap = (kidsFirst && kidsIndex > favIndex) || (!kidsFirst && favIndex > kidsIndex)
+        if (!wantSwap) return
+        val first = minOf(favIndex, kidsIndex)
+        homeColumn.removeView(favSection)
+        homeColumn.removeView(kidsSection)
+        if (kidsFirst) {
+            homeColumn.addView(kidsSection, first, fullWidth(dp(10)))
+            homeColumn.addView(favSection, first + 1, fullWidth(dp(10)))
+        } else {
+            homeColumn.addView(favSection, first, fullWidth(dp(10)))
+            homeColumn.addView(kidsSection, first + 1, fullWidth(dp(10)))
+        }
+    }
+
+    /** The drawer: grouped (Streaming, Kids, Music…), A–Z within each group, five per row. */
+    private fun buildDrawer(visible: List<AppEntry>, hiddenCount: Int) {
+        allGrid.removeAllViews()
+        firstGridRow = null
+        val groups = LinkedHashMap<String, ArrayList<View>>()
+        for (g in GROUP_ORDER) groups[g] = ArrayList()
+        for (app in visible.sortedBy { it.label.lowercase(Locale.UK) }) {
+            groups.getValue(groupOf(app)).add(artTile(app))
+        }
+        val tools = groups.getValue(G_TOOLS)
+        tools.add(tile("Settings", CARD_DIM, TEXT) { openSettings() })
+        if (hiddenCount > 0) {
+            tools.add(tile("Show hidden ($hiddenCount)", CARD_DIM, MUTED) {
+                prefs.edit().remove("hidden").apply()
+                buildRows()
+            })
+        }
+        for ((title, views) in groups) {
+            if (views.isEmpty()) continue
+            allGrid.addView(text(title, 15f, TEXT, bold = true), fullWidth(if (allGrid.childCount == 0) 0 else dp(20)))
+            var gridRow: LinearLayout? = null
+            views.forEachIndexed { i, v ->
+                if (i % 5 == 0) {
+                    val r = row()
+                    allGrid.addView(r, fullWidth(dp(10)))
+                    if (firstGridRow == null) firstGridRow = r
+                    gridRow = r
+                }
+                gridRow?.addView(v, LinearLayout.LayoutParams(dp(ART_W), dp(ART_H)).also { it.marginEnd = dp(16) })
+            }
+        }
+    }
+
+    private fun firstGridTile(): View? = firstGridRow?.getChildAt(0)
+
+    private fun openAllApps() {
+        if (allPanel.visibility == View.VISIBLE) return
+        allPanel.visibility = View.VISIBLE
+        // Keep the remote inside the drawer while it's open.
+        homeColumn.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        allPanel.translationY = resources.displayMetrics.heightPixels.toFloat()
+        allPanel.animate().translationY(0f).setDuration(220L).start()
+        firstGridTile()?.requestFocus()
+    }
+
     private fun closeAllApps() {
         homeColumn.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         lastHomeTile()?.requestFocus()
-        val h = resources.displayMetrics.heightPixels.toFloat()
-        allPanel.animate().translationY(h).setDuration(180L).withEndAction {
+        allPanel.animate().translationY(resources.displayMetrics.heightPixels.toFloat()).setDuration(180L).withEndAction {
             allPanel.visibility = View.GONE
             allPanel.translationY = 0f
         }.start()
+    }
+
+    /** The first tile of the lowest row on the home screen, where focus lands when the drawer closes. */
+    private fun lastHomeTile(): View? {
+        val candidates = listOf(favSection, kidsSection)
+            .filter { it.visibility == View.VISIBLE }
+            .sortedByDescending { homeColumn.indexOfChild(it) }
+        for (s in candidates) {
+            val r = if (s == favSection) favRow else kidsRow
+            val first = r.getChildAt(0)
+            if (first != null && first.isFocusable) return first
+        }
+        return jumpRow.getChildAt(0)
+    }
+
+    // ---------------------------------------------------------------- the hold-OK menu
+
+    private fun showAppMenu(app: AppEntry) {
+        val favs = favourites()
+        val isFav = favs.contains(app.pkg)
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+
+        if (isFav) {
+            if (favs.indexOf(app.pkg) > 0) {
+                labels.add("Move to front of Favourites")
+                actions.add {
+                    val list = favs.toMutableList()
+                    list.remove(app.pkg)
+                    list.add(0, app.pkg)
+                    setFavourites(list)
+                }
+            }
+            labels.add("Remove from Favourites")
+            actions.add { setFavourites(favs.filter { it != app.pkg }) }
+        } else {
+            labels.add("Add to Favourites")
+            actions.add {
+                if (favs.size >= 5) toast("Favourites holds five. Remove one first.")
+                else setFavourites(favs + app.pkg)
+            }
+        }
+        labels.add("Move to group…  (now: ${groupOf(app)})")
+        actions.add { showGroupMenu(app) }
+        labels.add("Hide")
+        actions.add {
+            val next = HashSet(hiddenSet())
+            next.add(app.pkg)
+            prefs.edit().putStringSet("hidden", next).apply()
+            setFavourites(favourites().filter { it != app.pkg })
+            toast("Hid ${app.label}. \"Show hidden\" in All apps › Tools brings it back.")
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle(app.label)
+            .setItems(labels.toTypedArray()) { _, which ->
+                actions[which]()
+                buildRows()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showGroupMenu(app: AppEntry) {
+        AlertDialog.Builder(this)
+            .setTitle("Move ${app.label} to")
+            .setItems(GROUP_ORDER.toTypedArray()) { _, which ->
+                prefs.edit().putString("group_${app.pkg}", GROUP_ORDER[which]).apply()
+                buildRows()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------------------------------------------------------------- saved choices
+
+    private fun hiddenSet(): Set<String> = prefs.getStringSet("hidden", emptySet()) ?: emptySet()
+
+    /** Favourite package names, in order. Seeded from DEFAULT_FAVOURITES the first time. */
+    private fun favourites(): List<String> {
+        val saved = prefs.getString("favs", null)
+        if (saved != null) return saved.split(",").filter { it.isNotBlank() }
+        val seeded = DEFAULT_FAVOURITES.mapNotNull { find(it, apps)?.pkg }.distinct()
+        if (apps.isNotEmpty()) setFavourites(seeded)
+        return seeded
+    }
+
+    private fun setFavourites(list: List<String>) {
+        prefs.edit().putString("favs", list.distinct().joinToString(",")).apply()
     }
 
     // ---------------------------------------------------------------- apps
@@ -484,8 +584,31 @@ class MainActivity : Activity() {
         }
         return apps.values.firstOrNull { app ->
             val label = app.label.lowercase(Locale.UK).trim()
-            w.labels.any { wanted -> if (w.loose) label.contains(wanted) else label == wanted }
+            w.labels.any { label == it }
         }
+    }
+
+    /** Which drawer group an app belongs in: your choice first, then its name, then its declared category. */
+    private fun groupOf(app: AppEntry): String {
+        val chosen = prefs.getString("group_${app.pkg}", null)
+        if (chosen != null && GROUP_ORDER.contains(chosen)) return chosen
+        val l = app.label.lowercase(Locale.UK).trim()
+        fun has(words: List<String>) = words.any { l.contains(it) }
+        if (has(KIDS_WORDS)) return G_KIDS
+        if (has(MUSIC_WORDS)) return G_MUSIC
+        if (has(GAME_WORDS)) return G_GAMES
+        if (l == "now" || l.startsWith("now ") || has(STREAM_WORDS)) return G_STREAM
+        if (has(TOOL_WORDS)) return G_TOOLS
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            when (app.info.applicationInfo.category) {
+                ApplicationInfo.CATEGORY_VIDEO -> return G_STREAM
+                ApplicationInfo.CATEGORY_AUDIO -> return G_MUSIC
+                ApplicationInfo.CATEGORY_GAME -> return G_GAMES
+                ApplicationInfo.CATEGORY_PRODUCTIVITY -> return G_TOOLS
+            }
+        }
+        if (app.pkg.startsWith("com.amazon.")) return G_AMAZON
+        return G_OTHER
     }
 
     private fun launch(pkg: String) {
@@ -572,6 +695,105 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------------------------------------------------------------- updates
+
+    private fun installedVersion(): Long {
+        return try {
+            val info = packageManager.getPackageInfo(packageName, 0)
+            @Suppress("DEPRECATION")
+            val code = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+            code
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    /** Looks for a newer build on GitHub. Shows the "Update ready" button if there is one. */
+    private fun checkForUpdate() {
+        lastUpdateCheck = System.currentTimeMillis()
+        val mine = installedVersion()
+        Thread {
+            try {
+                val conn = URL(RELEASE_URL).openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                conn.setRequestProperty("User-Agent", "FamilyHub")
+                conn.setRequestProperty("Accept", "application/vnd.github+json")
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val json = JSONObject(body)
+                val build = Regex("Build (\\d+)").find(json.optString("body"))?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+                val assets = json.getJSONArray("assets")
+                var url: String? = null
+                for (i in 0 until assets.length()) {
+                    val a = assets.getJSONObject(i)
+                    if (a.optString("name").endsWith(".apk")) url = a.optString("browser_download_url")
+                }
+                main.post {
+                    if (build > mine && url != null) {
+                        updateUrl = url
+                        updatePill.text = "Update ready"
+                        updatePill.visibility = View.VISIBLE
+                    } else {
+                        updatePill.visibility = View.GONE
+                    }
+                }
+            } catch (e: Exception) {
+                // Offline, rate-limited or the repo is private: try again later.
+            }
+        }.start()
+    }
+
+    /** Downloads the new build and hands it to the system installer. */
+    private fun installUpdate() {
+        val url = updateUrl ?: return
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            toast("Allow Family Hub to install apps: Settings › My Fire TV › Developer Options › Install unknown apps.")
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: Exception) {
+                // Fire OS may not have this page; the toast says where to go.
+            }
+            return
+        }
+        updatePill.text = "Downloading…"
+        Thread {
+            try {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.instanceFollowRedirects = true
+                conn.connectTimeout = 15000
+                conn.readTimeout = 30000
+                conn.setRequestProperty("User-Agent", "FamilyHub")
+                val installer = packageManager.packageInstaller
+                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+                val sessionId = installer.createSession(params)
+                val session = installer.openSession(sessionId)
+                conn.inputStream.use { input ->
+                    session.openWrite("family-hub.apk", 0, -1).use { output ->
+                        input.copyTo(output)
+                        session.fsync(output)
+                    }
+                }
+                conn.disconnect()
+                val status = Intent(ACTION_INSTALL_STATUS).setPackage(packageName)
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                    (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                val pending = PendingIntent.getBroadcast(this, sessionId, status, flags)
+                session.commit(pending.intentSender)
+                session.close()
+                main.post { updatePill.text = "Installing…" }
+            } catch (e: Exception) {
+                main.post {
+                    updatePill.text = "Update ready"
+                    toast("Couldn't download the update. Try again in a minute.")
+                }
+            }
+        }.start()
+    }
+
     // ---------------------------------------------------------------- clock and weather
 
     private fun updateClock() {
@@ -585,6 +807,8 @@ class MainActivity : Activity() {
             else -> "Evening"
         }
         dateView.text = SimpleDateFormat("EEE d MMM", Locale.UK).format(now) + "  ·  " + greeting + ", " + OWNER_NAME
+        // Swap Kids and Favourites when the hour changes, unless the drawer is open.
+        if (allPanel.visibility != View.VISIBLE) orderRows()
     }
 
     private fun fetchWeather() {
@@ -618,6 +842,124 @@ class MainActivity : Activity() {
         71, 73, 75, 77, 85, 86 -> "Snow"
         95, 96, 99 -> "Storms"
         else -> ""
+    }
+
+    // ---------------------------------------------------------------- app artwork
+
+    /** The app's wide TV banner if it has one, else null. */
+    private fun bannerOf(app: AppEntry): Drawable? {
+        val pm = packageManager
+        return try {
+            app.info.loadBanner(pm) ?: pm.getApplicationBanner(app.pkg)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun iconOf(app: AppEntry): Drawable? {
+        return try {
+            app.info.loadIcon(packageManager)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Ring and grow on focus, OK to open, hold OK for the menu. */
+    private fun makeTile(v: View, bg: Int, radiusDp: Int, onClick: () -> Unit, onHold: (() -> Unit)?) {
+        v.isFocusable = true
+        v.isClickable = true
+        v.background = rounded(bg, false, radiusDp)
+        v.clipToOutline = true
+        v.setOnClickListener { onClick() }
+        if (onHold != null) {
+            v.setOnLongClickListener {
+                onHold()
+                true
+            }
+        }
+        v.setOnFocusChangeListener { view, hasFocus ->
+            view.background = rounded(bg, hasFocus, radiusDp)
+            val scale = if (hasFocus) 1.08f else 1f
+            view.animate().scaleX(scale).scaleY(scale).setDuration(120L).start()
+            view.translationZ = if (hasFocus) dp(8).toFloat() else 0f
+        }
+    }
+
+    /**
+     * A 16:9 tile filled edge to edge by the app's banner. Apps without one get their icon
+     * and name instead. The 3 dp inset leaves room for the white focus ring.
+     */
+    private fun artTile(app: AppEntry): View {
+        val banner = bannerOf(app)
+        if (banner != null) {
+            val box = FrameLayout(this)
+            box.setPadding(dp(3), dp(3), dp(3), dp(3))
+            val img = ImageView(this)
+            img.setImageDrawable(banner)
+            img.scaleType = ImageView.ScaleType.CENTER_CROP
+            img.clipToOutline = true
+            img.background = rounded(Color.TRANSPARENT, false, 9)
+            box.addView(img, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            box.contentDescription = app.label
+            makeTile(box, CARD, 12, { launch(app.pkg) }, { showAppMenu(app) })
+            return box
+        }
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.gravity = Gravity.CENTER
+        box.setPadding(dp(8), dp(8), dp(8), dp(8))
+        val icon = iconOf(app)
+        if (icon != null) {
+            val img = ImageView(this)
+            img.setImageDrawable(icon)
+            img.scaleType = ImageView.ScaleType.FIT_CENTER
+            box.addView(img, LinearLayout.LayoutParams(dp(40), dp(40)))
+        }
+        val label = text(app.label, 12f, TEXT, bold = true)
+        label.maxLines = 1
+        label.gravity = Gravity.CENTER
+        box.addView(label, margins(0, dp(4), 0, 0))
+        box.contentDescription = app.label
+        makeTile(box, CARD, 12, { launch(app.pkg) }, { showAppMenu(app) })
+        return box
+    }
+
+    /** A big Jump back in tile: banner on the left at its own 16:9 shape, name and when on the right. */
+    private fun jumpTile(app: AppEntry): View {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.HORIZONTAL
+        box.gravity = Gravity.CENTER_VERTICAL
+        box.setPadding(dp(3), dp(3), dp(12), dp(3))
+        val art = bannerOf(app)
+        if (art != null) {
+            val img = ImageView(this)
+            img.setImageDrawable(art)
+            img.scaleType = ImageView.ScaleType.CENTER_CROP
+            img.clipToOutline = true
+            img.background = rounded(Color.TRANSPARENT, false, 12)
+            // 94 dp tall inside the 100 dp tile, so 167 dp wide keeps it 16:9.
+            box.addView(img, LinearLayout.LayoutParams(dp(167), ViewGroup.LayoutParams.MATCH_PARENT))
+        } else {
+            val icon = iconOf(app)
+            if (icon != null) {
+                val img = ImageView(this)
+                img.setImageDrawable(icon)
+                img.scaleType = ImageView.ScaleType.FIT_CENTER
+                box.addView(img, LinearLayout.LayoutParams(dp(64), dp(64)).also { it.marginStart = dp(12) })
+            }
+        }
+        val words = LinearLayout(this)
+        words.orientation = LinearLayout.VERTICAL
+        words.gravity = Gravity.CENTER_VERTICAL
+        words.setPadding(dp(14), 0, 0, 0)
+        val name = text(app.label, 17f, TEXT, bold = true)
+        name.maxLines = 2
+        words.addView(name)
+        words.addView(text(lastOpenedText(app), 11f, MUTED))
+        box.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        box.contentDescription = app.label
+        makeTile(box, CARD, 16, { launch(app.pkg) }, { showAppMenu(app) })
+        return box
     }
 
     // ---------------------------------------------------------------- view helpers
@@ -683,143 +1025,23 @@ class MainActivity : Activity() {
         return s
     }
 
-    // ---------------------------------------------------------------- app artwork
-
-    /** The app's wide TV banner if it has one, else null. */
-    private fun bannerOf(app: AppEntry): Drawable? {
-        val pm = packageManager
-        return try {
-            app.info.loadBanner(pm) ?: pm.getApplicationBanner(app.pkg)
-        } catch (e: Exception) {
-            null
-        }
+    /** A plain text tile (Settings, Show hidden). */
+    private fun tile(title: String, bg: Int, fg: Int, onClick: () -> Unit): View {
+        val label = text(title, 14f, fg, bold = true)
+        label.gravity = Gravity.CENTER
+        label.maxLines = 2
+        makeTile(label, bg, 12, onClick, null)
+        return label
     }
 
-    private fun iconOf(app: AppEntry): Drawable? {
-        return try {
-            app.info.loadIcon(packageManager)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /** Makes a view behave like a tile: ring and grow on focus, OK to open. */
-    private fun makeTile(v: View, bg: Int, onClick: () -> Unit) {
-        v.isFocusable = true
-        v.isClickable = true
-        v.background = rounded(bg, false)
-        v.clipToOutline = true
-        v.setOnClickListener { onClick() }
-        v.setOnFocusChangeListener { view, hasFocus ->
-            view.background = rounded(bg, hasFocus)
-            val scale = if (hasFocus) 1.06f else 1f
-            view.animate().scaleX(scale).scaleY(scale).setDuration(120L).start()
-            view.translationZ = if (hasFocus) dp(8).toFloat() else 0f
-        }
-    }
-
-    /**
-     * A tile showing the app's banner. Apps without a banner get their icon and name.
-     * The 3 dp inset leaves room for the white focus ring around the picture.
-     */
-    private fun artTile(app: AppEntry, bg: Int): View {
-        val banner = bannerOf(app)
-        if (banner != null) {
-            val box = FrameLayout(this)
-            box.setPadding(dp(3), dp(3), dp(3), dp(3))
-            val img = ImageView(this)
-            img.setImageDrawable(banner)
-            img.scaleType = ImageView.ScaleType.FIT_CENTER
-            img.clipToOutline = true
-            img.background = rounded(Color.TRANSPARENT, false, 13)
-            box.addView(img, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            box.contentDescription = app.label
-            makeTile(box, bg) { launch(app.pkg) }
-            return box
-        }
-        val box = LinearLayout(this)
-        box.orientation = LinearLayout.HORIZONTAL
-        box.gravity = Gravity.CENTER
-        box.setPadding(dp(10), dp(6), dp(10), dp(6))
-        val icon = iconOf(app)
-        if (icon != null) {
-            val img = ImageView(this)
-            img.setImageDrawable(icon)
-            img.scaleType = ImageView.ScaleType.FIT_CENTER
-            box.addView(img, LinearLayout.LayoutParams(dp(32), dp(32)).also { it.marginEnd = dp(8) })
-        }
-        val fg = if (bg == ACCENT) BG else TEXT
-        val label = text(app.label, 13f, fg, bold = true)
-        label.maxLines = 1
-        box.addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        box.contentDescription = app.label
-        makeTile(box, bg) { launch(app.pkg) }
-        return box
-    }
-
-    /** A big Jump back in tile: banner on the left, name and when on the right. */
-    private fun jumpTile(app: AppEntry): View {
-        val box = LinearLayout(this)
-        box.orientation = LinearLayout.HORIZONTAL
-        box.gravity = Gravity.CENTER_VERTICAL
-        box.setPadding(dp(3), dp(3), dp(12), dp(3))
-        val art = bannerOf(app) ?: iconOf(app)
-        if (art != null) {
-            val img = ImageView(this)
-            img.setImageDrawable(art)
-            img.scaleType = ImageView.ScaleType.FIT_CENTER
-            img.clipToOutline = true
-            img.background = rounded(Color.TRANSPARENT, false, 13)
-            box.addView(img, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.1f))
-        }
-        val words = LinearLayout(this)
-        words.orientation = LinearLayout.VERTICAL
-        words.gravity = Gravity.CENTER_VERTICAL
-        words.setPadding(dp(12), 0, 0, 0)
-        val name = text(app.label, 17f, TEXT, bold = true)
-        name.maxLines = 2
-        words.addView(name)
-        words.addView(text(lastOpenedText(app), 11f, MUTED))
-        box.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
-        box.contentDescription = app.label
-        makeTile(box, CARD) { launch(app.pkg) }
-        return box
-    }
-
-    /** A focusable card. It grows and gets a white ring when the remote lands on it. */
-    private fun tile(title: String, sub: String?, bg: Int, fg: Int, sizeSp: Float, onClick: () -> Unit): View {
-        val box = LinearLayout(this)
-        box.orientation = LinearLayout.VERTICAL
-        box.gravity = if (sub != null) Gravity.BOTTOM or Gravity.START else Gravity.CENTER
-        box.setPadding(dp(12), dp(6), dp(12), dp(8))
-        box.isFocusable = true
-        box.isClickable = true
-        box.background = rounded(bg, false)
-        box.setOnClickListener { onClick() }
-        box.setOnFocusChangeListener { v, hasFocus ->
-            v.background = rounded(bg, hasFocus)
-            val scale = if (hasFocus) 1.06f else 1f
-            v.animate().scaleX(scale).scaleY(scale).setDuration(120L).start()
-            v.translationZ = if (hasFocus) dp(8).toFloat() else 0f
-        }
-        if (sub != null) box.addView(text(sub, 11f, MUTED))
-        val label = text(title, sizeSp, fg, bold = true)
-        if (sub == null) {
-            label.gravity = Gravity.CENTER
-            label.maxLines = 1
-        }
-        box.addView(label)
-        return box
-    }
-
-    private fun pill(title: String, onClick: () -> Unit): View {
-        val tv = text(title, 13f, TEXT, bold = true)
+    private fun pill(title: String, bg: Int, fg: Int, onClick: () -> Unit): TextView {
+        val tv = text(title, 13f, fg, bold = true)
         tv.setPadding(dp(14), dp(8), dp(14), dp(8))
         tv.isFocusable = true
         tv.isClickable = true
-        tv.background = rounded(CARD, false, 12)
+        tv.background = rounded(bg, false, 12)
         tv.setOnClickListener { onClick() }
-        tv.setOnFocusChangeListener { v, hasFocus -> v.background = rounded(CARD, hasFocus, 12) }
+        tv.setOnFocusChangeListener { v, hasFocus -> v.background = rounded(bg, hasFocus, 12) }
         return tv
     }
 
