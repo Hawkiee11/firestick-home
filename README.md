@@ -7,7 +7,7 @@ things used most:
   selected. One press of OK gets you back to it.
 - **Favourites**: Netflix, NOW and YouTube, always in the same place.
 - **Kids**: CBeebies, YouTube Kids, BBC iPlayer and Disney+, whichever are installed.
-- **Apps**: everything else, scrolling sideways, plus Settings. Hold OK on an app to hide it; "Show hidden" at the end brings them back.
+- **Apps**: your five most-used other apps and an **All apps** tile that opens a grid of everything. Hold OK on an app to hide it; "Show hidden" at the end of the grid brings them back.
 - Clock, date, a greeting and the weather for Stratford-upon-Avon (Open-Meteo, no account).
 
 It is an ordinary app: Fire OS won't let anything replace Amazon's home screen, so pin it to the front

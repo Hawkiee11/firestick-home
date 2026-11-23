@@ -20,7 +20,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
+import android.widget.ScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -93,6 +93,10 @@ class MainActivity : Activity() {
     private lateinit var kidsSection: LinearLayout
     private lateinit var kidsRow: LinearLayout
     private lateinit var appsRow: LinearLayout
+    private lateinit var allPanel: LinearLayout
+    private lateinit var allGrid: LinearLayout
+    private var allAppsTile: View? = null
+    private lateinit var homeColumn: LinearLayout
 
     private var lastWeatherFetch = 0L
     private var recentTimes: Map<String, Long> = emptyMap()
@@ -116,6 +120,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        allPanel.visibility = View.GONE
+        homeColumn.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         buildRows()
         main.removeCallbacks(tick)
         main.post(tick)
@@ -128,7 +134,10 @@ class MainActivity : Activity() {
 
     // This is a home screen: Back has nowhere to go.
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK) return true
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (allPanel.visibility == View.VISIBLE) closeAllApps()
+            return true
+        }
         return super.onKeyDown(keyCode, event)
     }
 
@@ -140,6 +149,7 @@ class MainActivity : Activity() {
         root.clipChildren = false
 
         val column = LinearLayout(this)
+        homeColumn = column
         column.orientation = LinearLayout.VERTICAL
         column.clipChildren = false
         column.clipToPadding = false
@@ -184,15 +194,32 @@ class MainActivity : Activity() {
         kidsSection = section("Kids", kidsRow)
         column.addView(kidsSection, fullWidth(dp(12)))
 
-        // Everything else, scrolling sideways.
+        // Five more apps and an "All apps" tile. No sideways scrolling.
         appsRow = row()
-        appsRow.setPadding(dp(6), dp(8), dp(6), dp(8))
-        val scroller = HorizontalScrollView(this)
-        scroller.isHorizontalScrollBarEnabled = false
-        scroller.clipChildren = false
-        scroller.clipToPadding = false
-        scroller.addView(appsRow)
-        column.addView(section("Apps", scroller), fullWidth(dp(12)))
+        column.addView(section("Apps", appsRow), fullWidth(dp(12)))
+
+        // All apps: a full-screen grid on top, closed with Back.
+        allPanel = LinearLayout(this)
+        allPanel.orientation = LinearLayout.VERTICAL
+        allPanel.setBackgroundColor(BG)
+        allPanel.setPadding(dp(40), dp(24), dp(40), dp(0))
+        allPanel.visibility = View.GONE
+        allPanel.clipChildren = false
+        val head = text("All apps", 22f, TEXT, bold = true)
+        allPanel.addView(head)
+        allPanel.addView(text("Hold OK on an app to hide it  ·  Back to close", 12f, MUTED), fullWidth(dp(2)))
+        allGrid = LinearLayout(this)
+        allGrid.orientation = LinearLayout.VERTICAL
+        allGrid.clipChildren = false
+        allGrid.clipToPadding = false
+        allGrid.setPadding(dp(6), dp(12), dp(6), dp(24))
+        val gridScroll = ScrollView(this)
+        gridScroll.isVerticalScrollBarEnabled = false
+        gridScroll.clipChildren = false
+        gridScroll.clipToPadding = false
+        gridScroll.addView(allGrid)
+        allPanel.addView(gridScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).also { it.topMargin = dp(8) })
+        root.addView(allPanel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         return root
     }
@@ -262,39 +289,89 @@ class MainActivity : Activity() {
         kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
 
         // Apps
-        appsRow.removeAllViews()
-        val rest = apps.values
-            .filter { !used.contains(it.pkg) && !HIDDEN.contains(it.pkg) }
-            .sortedBy { it.label.lowercase(Locale.UK) }
+        // Apps: most recently used first, then A–Z. Five on the home screen, all in the grid.
         val hiddenByUser = prefs.getStringSet("hidden", emptySet()) ?: emptySet()
-        for (app in rest.filter { !hiddenByUser.contains(it.pkg) }) {
-            val view = tile(app.label, null, CARD_DIM, TEXT, 14f) { launch(app.pkg) }
-            view.setOnLongClickListener {
-                val next = HashSet(prefs.getStringSet("hidden", emptySet()) ?: emptySet())
-                next.add(app.pkg)
-                prefs.edit().putStringSet("hidden", next).apply()
-                toast("Hid ${app.label}. Use \"Show hidden\" at the end of Apps to bring it back.")
-                buildRows()
-                true
-            }
-            appsRow.addView(view, LinearLayout.LayoutParams(dp(150), dp(48)).also { it.marginEnd = dp(10) })
+        val rest = apps.values
+            .filter { !used.contains(it.pkg) && !HIDDEN.contains(it.pkg) && !hiddenByUser.contains(it.pkg) }
+            .sortedWith(compareByDescending<AppEntry> { lastOpened(it) }.thenBy { it.label.lowercase(Locale.UK) })
+
+        appsRow.removeAllViews()
+        val onHome = rest.take(5)
+        for (app in onHome) {
+            appsRow.addView(appTile(app), LinearLayout.LayoutParams(0, dp(48), 1f).also { it.marginEnd = dp(10) })
         }
-        appsRow.addView(
-            tile("Settings", null, CARD_DIM, TEXT, 14f) { openSettings() },
-            LinearLayout.LayoutParams(dp(150), dp(48)).also { it.marginEnd = dp(10) }
-        )
+        for (j in onHome.size until 5) {
+            appsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(48), 1f).also { it.marginEnd = dp(10) })
+        }
+        val all = tile("All apps", null, CARD, TEXT, 14f) { openAllApps() }
+        allAppsTile = all
+        appsRow.addView(all, LinearLayout.LayoutParams(0, dp(48), 1f))
+
+        // The All apps grid, five per row.
+        allGrid.removeAllViews()
+        val gridTiles = ArrayList<View>()
+        for (app in rest) gridTiles.add(appTile(app))
+        gridTiles.add(tile("Settings", null, CARD_DIM, TEXT, 14f) { openSettings() })
         if (hiddenByUser.isNotEmpty()) {
-            appsRow.addView(
-                tile("Show hidden (${hiddenByUser.size})", null, CARD_DIM, MUTED, 14f) {
-                    prefs.edit().remove("hidden").apply()
-                    buildRows()
-                },
-                LinearLayout.LayoutParams(dp(170), dp(48))
-            )
+            gridTiles.add(tile("Show hidden (${hiddenByUser.size})", null, CARD_DIM, MUTED, 14f) {
+                prefs.edit().remove("hidden").apply()
+                buildRows()
+            })
+        }
+        var gridRow: LinearLayout? = null
+        gridTiles.forEachIndexed { i, v ->
+            if (i % 5 == 0) {
+                val r = row()
+                allGrid.addView(r, fullWidth(if (i == 0) 0 else dp(14)))
+                gridRow = r
+            }
+            gridRow?.addView(v, LinearLayout.LayoutParams(0, dp(56), 1f).also { if (i % 5 != 4) it.marginEnd = dp(14) })
+        }
+        val leftover = gridTiles.size % 5
+        if (leftover != 0) {
+            for (j in leftover until 5) {
+                gridRow?.addView(View(this), LinearLayout.LayoutParams(0, dp(56), 1f).also { if (j != 4) it.marginEnd = dp(14) })
+            }
         }
 
-        // Start on the most recently used app, so one press of OK gets you back in.
-        jumpRow.getChildAt(0)?.requestFocus()
+        if (allPanel.visibility == View.VISIBLE) {
+            firstGridTile()?.requestFocus()
+        } else {
+            // Start on the most recently used app, so one press of OK gets you back in.
+            jumpRow.getChildAt(0)?.requestFocus()
+        }
+    }
+
+    /** An app tile: OK opens it, holding OK hides it. */
+    private fun appTile(app: AppEntry): View {
+        val view = tile(app.label, null, CARD_DIM, TEXT, 14f) { launch(app.pkg) }
+        view.setOnLongClickListener {
+            val next = HashSet(prefs.getStringSet("hidden", emptySet()) ?: emptySet())
+            next.add(app.pkg)
+            prefs.edit().putStringSet("hidden", next).apply()
+            toast("Hid ${app.label}. \"Show hidden\" at the end of All apps brings it back.")
+            buildRows()
+            true
+        }
+        return view
+    }
+
+    private fun firstGridTile(): View? {
+        val first = allGrid.getChildAt(0) as? LinearLayout ?: return null
+        return first.getChildAt(0)
+    }
+
+    private fun openAllApps() {
+        allPanel.visibility = View.VISIBLE
+        // Keep the remote inside the grid while it's open.
+        homeColumn.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        firstGridTile()?.requestFocus()
+    }
+
+    private fun closeAllApps() {
+        allPanel.visibility = View.GONE
+        homeColumn.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        allAppsTile?.requestFocus()
     }
 
     // ---------------------------------------------------------------- apps
