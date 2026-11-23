@@ -798,7 +798,11 @@ class MainActivity : Activity() {
             }
             return
         }
-        if (isUpdate) updatePill.text = "Downloading…" else toast("Downloading…")
+        if (isUpdate) {
+            updatePill.text = "Downloading…"
+        } else {
+            toast("Downloading…")
+        }
         Thread {
             try {
                 val conn = URL(url).openConnection() as HttpURLConnection
@@ -823,7 +827,13 @@ class MainActivity : Activity() {
                 val pending = PendingIntent.getBroadcast(this, sessionId, status, flags)
                 session.commit(pending.intentSender)
                 session.close()
-                main.post { if (isUpdate) updatePill.text = "Installing…" else toast("Installing…") }
+                main.post {
+                    if (isUpdate) {
+                        updatePill.text = "Installing…"
+                    } else {
+                        toast("Installing…")
+                    }
+                }
             } catch (e: Exception) {
                 main.post {
                     if (isUpdate) {
