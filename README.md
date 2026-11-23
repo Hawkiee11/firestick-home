@@ -10,7 +10,7 @@ used most.
 - **App drawer**: press down from the last row and every app slides up, grouped into Streaming, Kids,
   Music & audio, Games, Tools & settings, Amazon and Other (A–Z within each). Up from the top row, or
   Back, closes it.
-- **Hold OK on any app** for a menu: Add to / Remove from Favourites, Move to front of Favourites,
+- **Hold OK (or press ☰) on any app** for a menu: Add to / Remove from Favourites, Move left / right / to front,
   Move to group, Uninstall (apps you installed), Hide. Hidden apps sit faded in a Hidden section at the bottom of All apps; OK on one gives Unhide, Open or Uninstall.
 - Clock, date, a greeting (press OK on it to set the name) and the weather (Open-Meteo, no account). Press OK on the weather to set the place: type a town and pick it from the list.
 - **Add an app** (in Settings): type or paste a link to an .apk and Family Hub downloads and installs it (Fire OS asks first). No Downloader needed.
@@ -35,7 +35,10 @@ used most.
     unlocks for. In kids time the Kids row comes first; with the PIN lock on, opening anything outside
     the Kids group, the hold-OK menus and settings need the PIN. Outside kids time nothing is locked.
     (Amazon's own home screen isn't covered, so it's a nudge, not a wall.)
-  - Greeting name, Weather location, Add an app from a link, Fire TV settings.
+  - Greeting name, Weather location, Add an app from a link, Restart the Fire Stick (shows the remote
+    shortcut; an app can't restart the stick itself), Fire TV settings.
+- In kids time the top bar shows **Kids time · locked**, or **Unlocked · 23m · Lock now** after the PIN;
+  OK on it unlocks or locks straight away.
 
 Every app tile shows the app's own 16:9 TV banner, or a picture you chose.
 

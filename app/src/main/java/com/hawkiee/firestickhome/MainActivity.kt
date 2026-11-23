@@ -160,6 +160,7 @@ class MainActivity : Activity() {
     private lateinit var updatePill: TextView
     private lateinit var statusPill: TextView
     private lateinit var sleepPill: TextView
+    private lateinit var kidsPill: TextView
     private lateinit var jumpRow: LinearLayout
     private lateinit var favSection: LinearLayout
     private lateinit var favRow: LinearLayout
@@ -180,6 +181,7 @@ class MainActivity : Activity() {
             updateClock()
             updateStatus()
             updateSleepLabel()
+            updateKidsPill()
             val now = System.currentTimeMillis()
             if (now - lastWeatherFetch > WEATHER_REFRESH_MS) fetchWeather()
             if (now - lastUpdateCheck > UPDATE_CHECK_MS) checkForUpdate()
@@ -263,8 +265,16 @@ class MainActivity : Activity() {
         return super.onKeyDown(keyCode, event)
     }
 
-    // Up from the drawer's first row closes it.
+    // ☰ on an app tile opens its menu; Up from the drawer's first row closes the drawer.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_MENU) {
+            val pkg = currentFocus?.tag as? String
+            val app = if (pkg != null) apps[pkg] else null
+            if (app != null) {
+                if (hiddenSet().contains(app.pkg)) showHiddenMenu(app) else showAppMenu(app)
+                return true
+            }
+        }
         if (event.action == KeyEvent.ACTION_DOWN &&
             event.keyCode == KeyEvent.KEYCODE_DPAD_UP &&
             allPanel.visibility == View.VISIBLE
@@ -339,6 +349,19 @@ class MainActivity : Activity() {
         updatePill = pill("Update ready", ACCENT, BG) { installUpdate() }
         updatePill.visibility = View.GONE
         top.addView(updatePill, margins(0, 0, dp(10), 0))
+
+        // In kids time: "Kids time · locked" (OK to unlock) or "Unlocked · 23m" (OK to lock again).
+        kidsPill = pill("", CARD, TEXT) {
+            if (needsPin()) {
+                requirePin { updateKidsPill() }
+            } else {
+                unlockedUntil = 0L
+                toast("Locked.")
+                updateKidsPill()
+            }
+        }
+        kidsPill.visibility = View.GONE
+        top.addView(kidsPill, margins(0, 0, dp(10), 0))
 
         sleepPill = pill("Sleep", CARD, TEXT) { showSleepDialog() }
         top.addView(sleepPill, margins(0, 0, dp(10), 0))
@@ -567,14 +590,24 @@ class MainActivity : Activity() {
         val actions = ArrayList<() -> Unit>()
 
         if (isFav) {
-            if (favs.indexOf(app.pkg) > 0) {
+            val i = favs.indexOf(app.pkg)
+            fun moveTo(target: Int) {
+                val list = favs.toMutableList()
+                list.removeAt(i)
+                list.add(target, app.pkg)
+                setFavourites(list)
+            }
+            if (i > 0) {
+                labels.add("Move left in Favourites")
+                actions.add { moveTo(i - 1) }
+            }
+            if (i < favs.size - 1) {
+                labels.add("Move right in Favourites")
+                actions.add { moveTo(i + 1) }
+            }
+            if (i > 1) {
                 labels.add("Move to front of Favourites")
-                actions.add {
-                    val list = favs.toMutableList()
-                    list.remove(app.pkg)
-                    list.add(0, app.pkg)
-                    setFavourites(list)
-                }
+                actions.add { moveTo(0) }
             }
             labels.add("Remove from Favourites")
             actions.add { setFavourites(favs.filter { it != app.pkg }) }
@@ -688,6 +721,7 @@ class MainActivity : Activity() {
             "Greeting name" to { showNameDialog() },
             "Weather location" to { showLocationDialog() },
             "Add an app from a link" to { showAddAppDialog() },
+            "Restart the Fire Stick" to { showRestartHelp() },
             "Fire TV settings" to { openSettings() },
         )
         AlertDialog.Builder(this)
@@ -708,6 +742,7 @@ class MainActivity : Activity() {
         fetchWeather()
         updateStatus()
         updateSleepLabel()
+        updateKidsPill()
     }
 
     // ---------------------------------------------------------------- themes
@@ -975,6 +1010,7 @@ class MainActivity : Activity() {
             .setPositiveButton("OK") { _, _ ->
                 if (hashPin(input.text.toString().trim()) == prefs.getString("pin_hash", "")) {
                     unlockedUntil = System.currentTimeMillis() + prefs.getInt("unlock_minutes", 30) * 60_000L
+                    updateKidsPill()
                     action()
                 } else {
                     toast("Wrong PIN.")
@@ -1084,6 +1120,26 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun updateKidsPill() {
+        if (!isKidsTime()) {
+            kidsPill.visibility = View.GONE
+            return
+        }
+        kidsPill.visibility = View.VISIBLE
+        val left = unlockedUntil - System.currentTimeMillis()
+        kidsPill.text = if (left > 0L) "Unlocked · " + ((left + 59_999L) / 60_000L) + "m  ·  Lock now" else "Kids time · locked"
+    }
+
+    /** An app can't restart the stick itself, so this gives the remote shortcut and Amazon's menu. */
+    private fun showRestartHelp() {
+        AlertDialog.Builder(this)
+            .setTitle("Restart the Fire Stick")
+            .setMessage("Quickest: hold the middle Select button and Play/Pause together for about 5 seconds.\n\nOr in Fire TV settings: My Fire TV › Restart.")
+            .setPositiveButton("Open Fire TV settings") { _, _ -> openSettings() }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     // ---------------------------------------------------------------- saved choices
@@ -1735,6 +1791,7 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END
             ).also { it.topMargin = dp(6); it.rightMargin = dp(6) })
             box.contentDescription = app.label
+            box.tag = app.pkg
             makeTile(box, CARD, 12, open, hold, dim)
             return box
         }
@@ -1754,6 +1811,7 @@ class MainActivity : Activity() {
         label.gravity = Gravity.CENTER
         box.addView(label, margins(0, dp(4), 0, 0))
         box.contentDescription = app.label
+        box.tag = app.pkg
         makeTile(box, CARD, 12, open, hold, dim)
         return box
     }
@@ -1792,6 +1850,7 @@ class MainActivity : Activity() {
         words.addView(text(lastOpenedText(app), 11f, MUTED))
         box.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         box.contentDescription = app.label
+        box.tag = app.pkg
         makeTile(box, CARD, 16, { launch(app.pkg) }, { showAppMenu(app) })
         return box
     }
