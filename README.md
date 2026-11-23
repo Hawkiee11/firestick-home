@@ -16,6 +16,14 @@ used most.
 - **Add app** in the top bar: type or paste a link to an .apk and Family Hub downloads and installs it (Fire OS asks first). No Downloader needed.
 - **Update ready** appears in the top bar when a newer build is on GitHub: press OK to install it.
 
+- **Sleep** in the top bar: switch the TV off in 15 minutes to 2 hours. The first time, Fire OS asks
+  you to approve Family Hub as a device admin with one permission (switch the screen off). While that's
+  approved, Fire OS won't let Family Hub be uninstalled: turn it off first under Settings › My Fire TV ›
+  Security & Privacy › Device admin apps (wording varies).
+- A red warning in the top bar only when something's wrong: **No internet** or **Storage low** (under
+  1 GB free). OK on it opens the matching settings page.
+- Apps you installed in the last seven days get a **NEW** badge.
+
 Every app tile shows the app's own 16:9 TV banner.
 
 Fire OS won't let anything replace Amazon's home screen, so pin Family Hub to the front of Amazon's apps

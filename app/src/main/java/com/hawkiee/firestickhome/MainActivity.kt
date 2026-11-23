@@ -3,9 +3,12 @@ package com.hawkiee.firestickhome
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.AppOpsManager
+import android.app.AlarmManager
 import android.app.PendingIntent
+import android.app.admin.DevicePolicyManager
 import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -17,9 +20,13 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.os.StatFs
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -125,6 +132,8 @@ class MainActivity : Activity() {
     private lateinit var namePrompt: TextView
     private lateinit var weatherView: TextView
     private lateinit var updatePill: TextView
+    private lateinit var statusPill: TextView
+    private lateinit var sleepPill: TextView
     private lateinit var jumpRow: LinearLayout
     private lateinit var favSection: LinearLayout
     private lateinit var favRow: LinearLayout
@@ -143,6 +152,8 @@ class MainActivity : Activity() {
     private val tick = object : Runnable {
         override fun run() {
             updateClock()
+            updateStatus()
+            updateSleepLabel()
             val now = System.currentTimeMillis()
             if (now - lastWeatherFetch > WEATHER_REFRESH_MS) fetchWeather()
             if (now - lastUpdateCheck > UPDATE_CHECK_MS) checkForUpdate()
@@ -284,10 +295,17 @@ class MainActivity : Activity() {
 
         top.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
 
+        // Only shows when something's wrong: no internet, or storage nearly full.
+        statusPill = pill("", Color.parseColor("#5A2A2A"), TEXT) { openStatusSettings() }
+        statusPill.visibility = View.GONE
+        top.addView(statusPill, margins(0, 0, dp(10), 0))
+
         updatePill = pill("Update ready", ACCENT, BG) { installUpdate() }
         updatePill.visibility = View.GONE
         top.addView(updatePill, margins(0, 0, dp(10), 0))
 
+        sleepPill = pill("Sleep", CARD, TEXT) { showSleepDialog() }
+        top.addView(sleepPill, margins(0, 0, dp(10), 0))
         top.addView(pill("Add app", CARD, TEXT) { showAddAppDialog() }, margins(0, 0, dp(10), 0))
         top.addView(pill("Settings", CARD, TEXT) { openSettings() })
 
@@ -913,6 +931,121 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    // ---------------------------------------------------------------- status, new apps, sleep
+
+    /** "No internet" or "Storage low" in the top bar; hidden when all is well. */
+    private fun updateStatus() {
+        var msg: String? = null
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            val online = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            if (!online) msg = "No internet"
+        } catch (e: Exception) {
+            // Can't tell; say nothing.
+        }
+        if (msg == null) {
+            try {
+                val free = StatFs(Environment.getDataDirectory().path).availableBytes
+                if (free < 1024L * 1024L * 1024L) msg = "Storage low · " + (free / (1024L * 1024L)) + " MB free"
+            } catch (e: Exception) {
+                // Can't tell; say nothing.
+            }
+        }
+        statusKind = msg
+        if (msg == null) {
+            statusPill.visibility = View.GONE
+        } else {
+            statusPill.text = msg
+            statusPill.visibility = View.VISIBLE
+        }
+    }
+
+    private var statusKind: String? = null
+
+    private fun openStatusSettings() {
+        val action = if (statusKind == "No internet") Settings.ACTION_WIFI_SETTINGS else Settings.ACTION_INTERNAL_STORAGE_SETTINGS
+        try {
+            startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            openSettings()
+        }
+    }
+
+    /** Installed by you in the last seven days. */
+    private fun isNew(app: AppEntry): Boolean {
+        if ((app.info.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0) return false
+        return try {
+            val installed = packageManager.getPackageInfo(app.pkg, 0).firstInstallTime
+            System.currentTimeMillis() - installed < 7L * 24L * 3600L * 1000L
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun newBadge(): TextView {
+        val t = text("NEW", 9f, BG, bold = true)
+        t.setPadding(dp(6), dp(1), dp(6), dp(1))
+        t.background = rounded(ACCENT, false, 6)
+        return t
+    }
+
+    private fun sleepAdmin() = ComponentName(this, SleepAdmin::class.java)
+
+    private fun sleepPending(): PendingIntent {
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            (if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0)
+        return PendingIntent.getBroadcast(this, 7, Intent(this, SleepReceiver::class.java), flags)
+    }
+
+    private fun showSleepDialog() {
+        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        if (!dpm.isAdminActive(sleepAdmin())) {
+            // One-time approval: Fire OS asks whether Family Hub may switch the screen off.
+            try {
+                startActivity(
+                    Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                        .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, sleepAdmin())
+                        .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Lets the sleep timer switch the TV off. Nothing else.")
+                )
+                toast("Approve it, then press Sleep again to set the timer.")
+            } catch (e: Exception) {
+                toast("This Fire Stick won't allow the sleep timer without a computer. We can set it up with the Home button.")
+            }
+            return
+        }
+        val active = prefs.getLong("sleep_at", 0L) > System.currentTimeMillis()
+        val minutes = intArrayOf(15, 30, 60, 90, 120)
+        val labels = ArrayList<String>()
+        for (m in minutes) labels.add(if (m < 60) "$m minutes" else if (m == 60) "1 hour" else "${m / 60.0} hours".replace(".0", ""))
+        if (active) labels.add("Turn the timer off")
+        AlertDialog.Builder(this)
+            .setTitle("Switch the TV off in…")
+            .setItems(labels.toTypedArray()) { _, which ->
+                val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                if (which >= minutes.size) {
+                    am.cancel(sleepPending())
+                    prefs.edit().remove("sleep_at").apply()
+                    toast("Sleep timer off.")
+                } else {
+                    val at = System.currentTimeMillis() + minutes[which] * 60_000L
+                    am.cancel(sleepPending())
+                    am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, sleepPending())
+                    prefs.edit().putLong("sleep_at", at).apply()
+                    toast("The TV will switch off in ${labels[which]}.")
+                }
+                updateSleepLabel()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** "Sleep" normally; "Sleep · 42m" while a timer is running. */
+    private fun updateSleepLabel() {
+        val left = prefs.getLong("sleep_at", 0L) - System.currentTimeMillis()
+        sleepPill.text = if (left > 0L) "Sleep · " + ((left + 59_999L) / 60_000L) + "m" else "Sleep"
+    }
+
     // ---------------------------------------------------------------- clock and weather
 
     private fun updateClock() {
@@ -1129,6 +1262,9 @@ class MainActivity : Activity() {
             img.clipToOutline = true
             img.background = rounded(Color.TRANSPARENT, false, 9)
             box.addView(img, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            if (isNew(app)) box.addView(newBadge(), FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END
+            ).also { it.topMargin = dp(6); it.rightMargin = dp(6) })
             box.contentDescription = app.label
             makeTile(box, CARD, 12, open, hold, dim)
             return box
@@ -1144,7 +1280,7 @@ class MainActivity : Activity() {
             img.scaleType = ImageView.ScaleType.FIT_CENTER
             box.addView(img, LinearLayout.LayoutParams(dp(40), dp(40)))
         }
-        val label = text(app.label, 12f, TEXT, bold = true)
+        val label = text(if (isNew(app)) "New · " + app.label else app.label, 12f, TEXT, bold = true)
         label.maxLines = 1
         label.gravity = Gravity.CENTER
         box.addView(label, margins(0, dp(4), 0, 0))

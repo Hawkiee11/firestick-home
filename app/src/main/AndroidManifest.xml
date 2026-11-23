@@ -5,6 +5,9 @@
     <!-- Only for the weather (Open-Meteo, no account, no key). -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- The "No internet" warning in the top bar. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- In-app updates: hands the new build to the system installer, which asks first. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -57,5 +60,23 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- Sleep timer: a device admin with one policy (switch the screen off), approved on the TV. -->
+        <receiver
+            android:name=".SleepAdmin"
+            android:exported="true"
+            android:label="Family Hub sleep timer"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".SleepReceiver"
+            android:exported="false" />
     </application>
 </manifest>
