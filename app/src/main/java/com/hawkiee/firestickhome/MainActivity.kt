@@ -57,8 +57,6 @@ data class Wanted(val pkgs: List<String>, val labels: List<String>)
 class MainActivity : Activity() {
 
     companion object {
-        const val OWNER_NAME = "Sean"
-
         // Weather and place search: Open-Meteo, no account or key. The place is chosen on the TV.
         const val WEATHER_URL = "https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code&timezone=auto"
         const val GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search?count=6&language=en&format=json&name="
@@ -266,8 +264,11 @@ class MainActivity : Activity() {
         clockView = text("--:--", 34f, TEXT, light = true)
         top.addView(clockView)
 
-        dateView = text("", 14f, MUTED)
-        top.addView(dateView, margins(dp(14), 0, dp(14), 0))
+        // Date and greeting: press OK on it to set the name it greets.
+        dateView = pill("", BG, MUTED) { showNameDialog() }
+        dateView.typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        dateView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        top.addView(dateView, margins(dp(4), 0, dp(4), 0))
 
         // The weather pill: press OK on it to change the place.
         weatherView = pill("Set weather location", CARD_DIM, TEXT) { showLocationDialog() }
@@ -860,7 +861,9 @@ class MainActivity : Activity() {
             hour < 18 -> "Afternoon"
             else -> "Evening"
         }
-        dateView.text = SimpleDateFormat("EEE d MMM", Locale.UK).format(now) + "  ·  " + greeting + ", " + OWNER_NAME
+        val name = prefs.getString("owner_name", null)?.trim().orEmpty()
+        val hello = if (name.isEmpty()) greeting else "$greeting, $name"
+        dateView.text = SimpleDateFormat("EEE d MMM", Locale.UK).format(now) + "  ·  " + hello
         // Swap Kids and Favourites when the hour changes, unless the drawer is open.
         if (allPanel.visibility != View.VISIBLE) orderRows()
     }
@@ -893,6 +896,29 @@ class MainActivity : Activity() {
                 lastWeatherFetch = 0L
             }
         }.start()
+    }
+
+    /** The name in the greeting. Blank means just "Evening". */
+    private fun showNameDialog() {
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        input.setSingleLine(true)
+        input.hint = "Name (or leave blank)"
+        input.setText(prefs.getString("owner_name", ""))
+        input.setSelection(input.text.length)
+        val box = FrameLayout(this)
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle("Who should it greet?")
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                prefs.edit().putString("owner_name", input.text.toString().trim()).apply()
+                updateClock()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+        input.requestFocus()
     }
 
     /** Type a town, pick the right one from the matches, and the weather follows it. */

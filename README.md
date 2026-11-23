@@ -12,7 +12,7 @@ used most.
   Back, closes it.
 - **Hold OK on any app** for a menu: Add to / Remove from Favourites, Move to front of Favourites,
   Move to group, Hide. "Show hidden" in the drawer's Tools group brings hidden apps back.
-- Clock, date, a greeting and the weather (Open-Meteo, no account). Press OK on the weather to set the place: type a town and pick it from the list.
+- Clock, date, a greeting (press OK on it to set the name) and the weather (Open-Meteo, no account). Press OK on the weather to set the place: type a town and pick it from the list.
 - **Add app** in the top bar: type or paste a link to an .apk and Family Hub downloads and installs it (Fire OS asks first). No Downloader needed.
 - **Update ready** appears in the top bar when a newer build is on GitHub: press OK to install it.
 
