@@ -762,6 +762,7 @@ class MainActivity : Activity() {
             "Greeting name" to { showNameDialog() },
             "Weather location" to { showLocationDialog() },
             "Add an app from a link" to { showAddAppDialog() },
+            "Check for updates  ·  build ${installedVersion()}" to { checkForUpdate(manual = true) },
             "Restart the Fire Stick" to { showRestartHelp() },
             "Fire TV settings" to { openSettings() },
         )
@@ -1365,8 +1366,10 @@ class MainActivity : Activity() {
     }
 
     /** Looks for a newer build on GitHub. Shows the "Update ready" button if there is one. */
-    private fun checkForUpdate() {
+    /** [manual]: from the settings button, so always say what happened. */
+    private fun checkForUpdate(manual: Boolean = false) {
         lastUpdateCheck = System.currentTimeMillis()
+        if (manual) toast("Checking for updates…")
         val mine = installedVersion()
         Thread {
             try {
@@ -1390,12 +1393,22 @@ class MainActivity : Activity() {
                         updateUrl = url
                         updatePill.text = "Update ready"
                         updatePill.visibility = View.VISIBLE
+                        if (manual) {
+                            AlertDialog.Builder(this)
+                                .setTitle("Update available")
+                                .setMessage("Build $build is ready (you have build $mine). Install it now?")
+                                .setPositiveButton("Install") { _, _ -> installUpdate() }
+                                .setNegativeButton("Later", null)
+                                .show()
+                        }
                     } else {
                         updatePill.visibility = View.GONE
+                        if (manual) toast("You're up to date (build $mine).")
                     }
                 }
             } catch (e: Exception) {
                 // Offline, rate-limited or the repo is private: try again later.
+                if (manual) main.post { toast("Couldn't check for updates. Check the internet and that the repo is public.") }
             }
         }.start()
     }

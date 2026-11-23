@@ -14,6 +14,7 @@ used most.
   Move to group, Uninstall (apps you installed), Hide. In All apps, a padlock marks Amazon's built-in apps, which can be hidden but not uninstalled. Hidden apps sit faded in a Hidden section at the bottom of All apps; OK on one gives Unhide, Open or Uninstall.
 - Clock, date, a greeting (press OK on it to set the name) and the weather (Open-Meteo, no account). Press OK on the weather to set the place: type a town and pick it from the list.
 - **Add an app** (in Settings): type or paste a link to an .apk and Family Hub downloads and installs it (Fire OS asks first). No Downloader needed.
+- **Settings › Check for updates** checks straight away and shows the build you have.
 - **Update ready** appears in the top bar when a newer build is on GitHub: press OK to install it.
 
 - **Sleep** in the top bar: switch the TV off in 15 minutes to 2 hours. Fire OS won't show the approval
