@@ -526,6 +526,12 @@ class MainActivity : Activity() {
         }
         labels.add("Move to group…  (now: ${groupOf(app)})")
         actions.add { showGroupMenu(app) }
+        // Amazon's built-in apps can't be uninstalled, only hidden, so only offer it for the rest.
+        val isSystem = (app.info.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+        if (!isSystem) {
+            labels.add("Uninstall")
+            actions.add { uninstall(app) }
+        }
         labels.add("Hide")
         actions.add {
             val next = HashSet(hiddenSet())
@@ -554,6 +560,27 @@ class MainActivity : Activity() {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    /** Hands the app to Fire OS's own uninstall screen, which asks before removing it. */
+    private fun uninstall(app: AppEntry) {
+        setFavourites(favourites().filter { it != app.pkg })
+        try {
+            @Suppress("DEPRECATION")
+            val intent = Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:${app.pkg}"))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (e: Exception) {
+            // Fall back to the app's page in Settings, which has an Uninstall button.
+            try {
+                startActivity(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${app.pkg}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e2: Exception) {
+                toast("Couldn't uninstall ${app.label}. Try Settings › Applications.")
+            }
+        }
     }
 
     // ---------------------------------------------------------------- saved choices

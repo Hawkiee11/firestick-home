@@ -8,6 +8,9 @@
     <!-- In-app updates: hands the new build to the system installer, which asks first. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Uninstall from the hold-OK menu: opens the system's own "Uninstall?" screen. -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+
     <!-- Optional: lets "Jump back in" see apps opened outside this screen. Granted over ADB only. -->
     <uses-permission
         android:name="android.permission.PACKAGE_USAGE_STATS"
