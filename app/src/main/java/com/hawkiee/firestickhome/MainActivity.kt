@@ -122,6 +122,7 @@ class MainActivity : Activity() {
     private lateinit var homeColumn: LinearLayout
     private lateinit var clockView: TextView
     private lateinit var dateView: TextView
+    private lateinit var namePrompt: TextView
     private lateinit var weatherView: TextView
     private lateinit var updatePill: TextView
     private lateinit var jumpRow: LinearLayout
@@ -269,6 +270,11 @@ class MainActivity : Activity() {
         dateView.typeface = Typeface.create("sans-serif", Typeface.NORMAL)
         dateView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         top.addView(dateView, margins(dp(4), 0, dp(4), 0))
+        // Until a name is set, a box after the date prompts for it.
+        namePrompt = pill("Set your name", CARD_DIM, TEXT) { showNameDialog() }
+        namePrompt.background = rounded(CARD_DIM, false, 999)
+        namePrompt.setOnFocusChangeListener { v, hasFocus -> v.background = rounded(CARD_DIM, hasFocus, 999) }
+        top.addView(namePrompt, margins(0, 0, dp(10), 0))
 
         // The weather pill: press OK on it to change the place.
         weatherView = pill("Set weather location", CARD_DIM, TEXT) { showLocationDialog() }
@@ -863,6 +869,7 @@ class MainActivity : Activity() {
         }
         val name = prefs.getString("owner_name", null)?.trim().orEmpty()
         val hello = if (name.isEmpty()) greeting else "$greeting, $name"
+        namePrompt.visibility = if (name.isEmpty()) View.VISIBLE else View.GONE
         dateView.text = SimpleDateFormat("EEE d MMM", Locale.UK).format(now) + "  ·  " + hello
         // Swap Kids and Favourites when the hour changes, unless the drawer is open.
         if (allPanel.visibility != View.VISIBLE) orderRows()
