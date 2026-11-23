@@ -13,18 +13,31 @@ used most.
 - **Hold OK on any app** for a menu: Add to / Remove from Favourites, Move to front of Favourites,
   Move to group, Uninstall (apps you installed), Hide. Hidden apps sit faded in a Hidden section at the bottom of All apps; OK on one gives Unhide, Open or Uninstall.
 - Clock, date, a greeting (press OK on it to set the name) and the weather (Open-Meteo, no account). Press OK on the weather to set the place: type a town and pick it from the list.
-- **Add app** in the top bar: type or paste a link to an .apk and Family Hub downloads and installs it (Fire OS asks first). No Downloader needed.
+- **Add an app** (in Settings): type or paste a link to an .apk and Family Hub downloads and installs it (Fire OS asks first). No Downloader needed.
 - **Update ready** appears in the top bar when a newer build is on GitHub: press OK to install it.
 
-- **Sleep** in the top bar: switch the TV off in 15 minutes to 2 hours. The first time, Fire OS asks
-  you to approve Family Hub as a device admin with one permission (switch the screen off). While that's
-  approved, Fire OS won't let Family Hub be uninstalled: turn it off first under Settings › My Fire TV ›
-  Security & Privacy › Device admin apps (wording varies).
+- **Sleep** in the top bar: switch the TV off in 15 minutes to 2 hours. Fire OS won't show the approval
+  screen on the TV, so it needs one command from a computer first:
+  `adb shell dpm set-active-admin com.hawkiee.firestickhome/.SleepAdmin`. While that's on, Fire OS won't
+  let Family Hub be uninstalled until it's switched off again
+  (`adb shell dpm remove-active-admin com.hawkiee.firestickhome/.SleepAdmin`).
 - A red warning in the top bar only when something's wrong: **No internet** or **Storage low** (under
   1 GB free). OK on it opens the matching settings page.
 - Apps you installed in the last seven days get a **NEW** badge.
 
-Every app tile shows the app's own 16:9 TV banner.
+- **Settings** in the top bar opens Family Hub settings:
+  - **Theme**: Navy, Midnight, Slate, Forest, Plum or Ember.
+  - **Wallpaper**: Plain, Soft glow, Gradient, or a photo from a link (shown under a dark veil so text
+    stays readable).
+  - **App pictures**: one list of every app; pick one, give it a picture from a link, and the list comes
+    straight back for the next. "Reset all pictures" undoes them all. Also in each app's hold-OK menu.
+  - **Kids time & PIN**: set the hours (they can cross midnight), a 4–8 digit PIN, and how long the PIN
+    unlocks for. In kids time the Kids row comes first; with the PIN lock on, opening anything outside
+    the Kids group, the hold-OK menus and settings need the PIN. Outside kids time nothing is locked.
+    (Amazon's own home screen isn't covered, so it's a nudge, not a wall.)
+  - Greeting name, Weather location, Add an app from a link, Fire TV settings.
+
+Every app tile shows the app's own 16:9 TV banner, or a picture you chose.
 
 Fire OS won't let anything replace Amazon's home screen, so pin Family Hub to the front of Amazon's apps
 row and it's one click from Home.

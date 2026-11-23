@@ -17,7 +17,10 @@ import android.content.pm.ActivityInfo
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInstaller
 import android.graphics.Color
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.net.ConnectivityManager
@@ -45,7 +48,10 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
+import java.security.MessageDigest
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -54,6 +60,12 @@ import java.util.Locale
 
 /** An installed app we can open. */
 data class AppEntry(val pkg: String, val label: String, val info: ActivityInfo)
+
+/** A colour theme for the whole screen. */
+data class HubTheme(
+    val name: String, val bg: String, val card: String, val cardDim: String,
+    val text: String, val muted: String, val accent: String
+)
 
 /**
  * An app we want by default. Matched by package name first, then by its label,
@@ -106,17 +118,27 @@ class MainActivity : Activity() {
         // Things that should never appear as a tile.
         val HIDDEN = setOf("com.amazon.tv.launcher")
 
-        // The Kids row goes above Favourites between these hours.
-        const val KIDS_FIRST_FROM = 6
-        const val KIDS_FIRST_UNTIL = 19
+        // Kids time defaults: the Kids row goes above Favourites in these hours, and with a PIN set,
+        // apps outside the Kids group need it. Both are changed in Family Hub settings.
+        const val KIDS_FROM_DEFAULT = 6
+        const val KIDS_UNTIL_DEFAULT = 19
 
-        // Colours from the Family Hub+ design.
-        val BG = Color.parseColor("#14161F")
-        val CARD = Color.parseColor("#262A3A")
-        val CARD_DIM = Color.parseColor("#1F2230")
-        val TEXT = Color.parseColor("#F4F1EA")
-        val MUTED = Color.parseColor("#C9C3B6")
-        val ACCENT = Color.parseColor("#F3C98B")
+        val THEMES = listOf(
+            HubTheme("Navy", "#14161F", "#262A3A", "#1F2230", "#F4F1EA", "#C9C3B6", "#F3C98B"),
+            HubTheme("Midnight", "#000000", "#1C1C1E", "#121214", "#FFFFFF", "#B5B5B5", "#7FB2FF"),
+            HubTheme("Slate", "#1B1F24", "#2C333B", "#232930", "#EEF1F4", "#AEB7C0", "#7FD1C7"),
+            HubTheme("Forest", "#121A16", "#22302A", "#1A2520", "#EEF3EE", "#B4C2B8", "#9ED8A4"),
+            HubTheme("Plum", "#1A1420", "#2E2438", "#241C2C", "#F5EEF6", "#C6B8C9", "#F2A7C3"),
+            HubTheme("Ember", "#1C1512", "#33261F", "#281E19", "#F7EFE8", "#CDBFB3", "#FFB36B"),
+        )
+
+        // The current theme's colours (set by applyTheme).
+        var BG = Color.parseColor("#14161F")
+        var CARD = Color.parseColor("#262A3A")
+        var CARD_DIM = Color.parseColor("#1F2230")
+        var TEXT = Color.parseColor("#F4F1EA")
+        var MUTED = Color.parseColor("#C9C3B6")
+        var ACCENT = Color.parseColor("#F3C98B")
 
         // App tiles are the same shape as the apps' TV banners (16:9), so the art fills them.
         const val ART_W = 156
@@ -127,6 +149,10 @@ class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
 
     private lateinit var homeColumn: LinearLayout
+    private lateinit var rootView: FrameLayout
+    private lateinit var wallpaperImage: ImageView
+    private lateinit var wallpaperVeil: View
+    private var unlockedUntil = 0L
     private lateinit var clockView: TextView
     private lateinit var dateView: TextView
     private lateinit var namePrompt: TextView
@@ -194,6 +220,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("home", Context.MODE_PRIVATE)
+        applyTheme()
         window.decorView.setBackgroundColor(BG)
         setContentView(buildScreen())
         val filter = IntentFilter(ACTION_INSTALL_STATUS)
@@ -256,8 +283,17 @@ class MainActivity : Activity() {
 
     private fun buildScreen(): View {
         val root = FrameLayout(this)
-        root.setBackgroundColor(BG)
         root.clipChildren = false
+        rootView = root
+
+        // Wallpaper: a photo (with a dark veil so text stays readable) or a drawn background.
+        wallpaperImage = ImageView(this)
+        wallpaperImage.scaleType = ImageView.ScaleType.CENTER_CROP
+        root.addView(wallpaperImage, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        wallpaperVeil = View(this)
+        wallpaperVeil.setBackgroundColor(Color.argb(170, 0, 0, 0))
+        root.addView(wallpaperVeil, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        applyWallpaper()
 
         val column = LinearLayout(this)
         homeColumn = column
@@ -306,8 +342,7 @@ class MainActivity : Activity() {
 
         sleepPill = pill("Sleep", CARD, TEXT) { showSleepDialog() }
         top.addView(sleepPill, margins(0, 0, dp(10), 0))
-        top.addView(pill("Add app", CARD, TEXT) { showAddAppDialog() }, margins(0, 0, dp(10), 0))
-        top.addView(pill("Settings", CARD, TEXT) { openSettings() })
+        top.addView(pill("Settings", CARD, TEXT) { requirePin { showHubSettings() } })
 
         column.addView(top, fullWidth(0))
 
@@ -434,7 +469,7 @@ class MainActivity : Activity() {
     /** Kids above Favourites in the daytime, below in the evening. */
     private fun orderRows() {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val kidsFirst = hour in KIDS_FIRST_FROM until KIDS_FIRST_UNTIL
+        val kidsFirst = inKidsHours(hour)
         val favIndex = homeColumn.indexOfChild(favSection)
         val kidsIndex = homeColumn.indexOfChild(kidsSection)
         val wantSwap = (kidsFirst && kidsIndex > favIndex) || (!kidsFirst && favIndex > kidsIndex)
@@ -461,7 +496,7 @@ class MainActivity : Activity() {
             groups.getValue(groupOf(app)).add(artTile(app))
         }
         val tools = groups.getValue(G_TOOLS)
-        tools.add(tile("Settings", CARD_DIM, TEXT) { openSettings() })
+        tools.add(tile("Fire TV settings", CARD_DIM, TEXT) { openSettings() })
         // Hidden apps get their own section at the very bottom, faded. OK on one opens its menu.
         val hiddenTitle = "Hidden"
         groups[hiddenTitle] = ArrayList()
@@ -522,6 +557,10 @@ class MainActivity : Activity() {
     // ---------------------------------------------------------------- the hold-OK menu
 
     private fun showAppMenu(app: AppEntry) {
+        if (needsPin()) {
+            requirePin { showAppMenu(app) }
+            return
+        }
         val favs = favourites()
         val isFav = favs.contains(app.pkg)
         val labels = ArrayList<String>()
@@ -554,6 +593,8 @@ class MainActivity : Activity() {
             labels.add("Uninstall")
             actions.add { uninstall(app) }
         }
+        labels.add("Change picture…")
+        actions.add { showPictureOptions(app, false) }
         labels.add("Hide")
         actions.add {
             val next = HashSet(hiddenSet())
@@ -586,6 +627,10 @@ class MainActivity : Activity() {
 
     /** The menu for an app in the Hidden section. */
     private fun showHiddenMenu(app: AppEntry) {
+        if (needsPin()) {
+            requirePin { showHiddenMenu(app) }
+            return
+        }
         val labels = arrayListOf("Unhide", "Open")
         val actions = arrayListOf<() -> Unit>(
             {
@@ -628,6 +673,406 @@ class MainActivity : Activity() {
                 )
             } catch (e2: Exception) {
                 toast("Couldn't uninstall ${app.label}. Try Settings › Applications.")
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- Family Hub settings
+
+    private fun showHubSettings() {
+        val items = listOf<Pair<String, () -> Unit>>(
+            "Theme  ·  ${currentTheme().name}" to { showThemeDialog() },
+            "Wallpaper  ·  ${wallpaperLabel()}" to { showWallpaperDialog() },
+            "App pictures" to { showPicturesDialog() },
+            "Kids time & PIN  ·  ${kidsSummary()}" to { showKidsDialog() },
+            "Greeting name" to { showNameDialog() },
+            "Weather location" to { showLocationDialog() },
+            "Add an app from a link" to { showAddAppDialog() },
+            "Fire TV settings" to { openSettings() },
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Family Hub settings")
+            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    /** Rebuilds the whole screen, after a theme or wallpaper change. */
+    private fun rebuildScreen() {
+        applyTheme()
+        window.decorView.setBackgroundColor(BG)
+        setContentView(buildScreen())
+        buildRows()
+        updateClock()
+        lastWeatherFetch = 0L
+        fetchWeather()
+        updateStatus()
+        updateSleepLabel()
+    }
+
+    // ---------------------------------------------------------------- themes
+
+    private fun currentTheme(): HubTheme {
+        val name = prefs.getString("theme", null)
+        return THEMES.firstOrNull { it.name == name } ?: THEMES[0]
+    }
+
+    private fun applyTheme() {
+        val t = currentTheme()
+        BG = Color.parseColor(t.bg)
+        CARD = Color.parseColor(t.card)
+        CARD_DIM = Color.parseColor(t.cardDim)
+        TEXT = Color.parseColor(t.text)
+        MUTED = Color.parseColor(t.muted)
+        ACCENT = Color.parseColor(t.accent)
+    }
+
+    private fun showThemeDialog() {
+        val names = THEMES.map { it.name }.toTypedArray()
+        val current = THEMES.indexOf(currentTheme())
+        AlertDialog.Builder(this)
+            .setTitle("Theme")
+            .setSingleChoiceItems(names, current) { dialog, which ->
+                prefs.edit().putString("theme", THEMES[which].name).apply()
+                dialog.dismiss()
+                rebuildScreen()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------------------------------------------------------------- wallpaper
+
+    private fun wallpaperLabel(): String = when (prefs.getString("wall", "plain")) {
+        "glow" -> "Soft glow"
+        "gradient" -> "Gradient"
+        "photo" -> "Photo"
+        else -> "Plain"
+    }
+
+    private fun applyWallpaper() {
+        val mode = prefs.getString("wall", "plain")
+        wallpaperImage.setImageDrawable(null)
+        wallpaperVeil.visibility = View.GONE
+        when (mode) {
+            "glow" -> {
+                val g = GradientDrawable()
+                g.gradientType = GradientDrawable.RADIAL_GRADIENT
+                g.colors = intArrayOf(Color.argb(110, Color.red(ACCENT), Color.green(ACCENT), Color.blue(ACCENT)), BG)
+                g.setGradientCenter(0.22f, 0.0f)
+                g.gradientRadius = resources.displayMetrics.widthPixels * 0.75f
+                rootView.background = g
+            }
+            "gradient" -> {
+                val g = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(CARD, BG, BG))
+                rootView.background = g
+            }
+            "photo" -> {
+                val file = File(filesDir, "wallpaper.jpg")
+                val bmp = if (file.exists()) BitmapFactory.decodeFile(file.path) else null
+                rootView.setBackgroundColor(BG)
+                if (bmp != null) {
+                    wallpaperImage.setImageBitmap(bmp)
+                    wallpaperVeil.visibility = View.VISIBLE
+                }
+            }
+            else -> rootView.setBackgroundColor(BG)
+        }
+    }
+
+    private fun showWallpaperDialog() {
+        val options = arrayOf("Plain", "Soft glow", "Gradient", "Photo from a link…")
+        val keys = arrayOf("plain", "glow", "gradient", "photo")
+        val current = keys.indexOf(prefs.getString("wall", "plain")).coerceAtLeast(0)
+        AlertDialog.Builder(this)
+            .setTitle("Wallpaper")
+            .setSingleChoiceItems(options, current) { dialog, which ->
+                dialog.dismiss()
+                if (keys[which] == "photo") {
+                    askForLink("Wallpaper photo", "Link to a .jpg or .png. A wide (landscape) photo looks best.", "wall_url") { url ->
+                        saveImageFromLink(url, File(filesDir, "wallpaper.jpg"), 1920, 1080) { ok ->
+                            if (ok) {
+                                prefs.edit().putString("wall", "photo").apply()
+                                rebuildScreen()
+                            }
+                        }
+                    }
+                } else {
+                    prefs.edit().putString("wall", keys[which]).apply()
+                    rebuildScreen()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------------------------------------------------------------- app pictures
+
+    private fun artFile(pkg: String) = File(filesDir, "art_$pkg.png")
+
+    private fun customArt(pkg: String): Drawable? {
+        val file = artFile(pkg)
+        if (!file.exists()) return null
+        val bmp = BitmapFactory.decodeFile(file.path) ?: return null
+        return BitmapDrawable(resources, bmp)
+    }
+
+    /** One list of every app, so pictures can be changed one after another without hunting for tiles. */
+    private fun showPicturesDialog() {
+        val list = apps.values.filter { !HIDDEN.contains(it.pkg) }.sortedBy { it.label.lowercase(Locale.UK) }
+        val labels = ArrayList<String>()
+        labels.add("Reset all pictures")
+        for (app in list) labels.add(if (artFile(app.pkg).exists()) "${app.label}  ·  custom" else app.label)
+        AlertDialog.Builder(this)
+            .setTitle("App pictures")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == 0) {
+                    for (app in list) artFile(app.pkg).delete()
+                    toast("All apps are back to their own pictures.")
+                    buildRows()
+                } else {
+                    showPictureOptions(list[which - 1], true)
+                }
+            }
+            .setNegativeButton("Done", null)
+            .show()
+    }
+
+    /** [backToList]: after a change, reopen the full list so the next app is one press away. */
+    private fun showPictureOptions(app: AppEntry, backToList: Boolean) {
+        val hasCustom = artFile(app.pkg).exists()
+        val options = if (hasCustom) arrayOf("Use a picture from a link…", "Use the app's own picture") else arrayOf("Use a picture from a link…")
+        AlertDialog.Builder(this)
+            .setTitle(app.label)
+            .setItems(options) { _, which ->
+                if (which == 0) {
+                    askForLink("Picture for ${app.label}", "Link to a .jpg or .png. Wide (16:9) pictures fit best.", "art_url") { url ->
+                        saveImageFromLink(url, artFile(app.pkg), 640, 360) { ok ->
+                            buildRows()
+                            if (ok && backToList) showPicturesDialog()
+                        }
+                    }
+                } else {
+                    artFile(app.pkg).delete()
+                    buildRows()
+                    if (backToList) showPicturesDialog()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** A box for a link. Remembers the last one typed under [rememberKey]. */
+    private fun askForLink(title: String, message: String, rememberKey: String, onUrl: (String) -> Unit) {
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        input.setSingleLine(true)
+        input.setText(prefs.getString(rememberKey, "https://"))
+        input.setSelection(input.text.length)
+        val box = FrameLayout(this)
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setView(box)
+            .setPositiveButton("OK") { _, _ ->
+                val url = input.text.toString().trim()
+                if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                    toast("That doesn't look like a link. It should start with https://")
+                } else {
+                    prefs.edit().putString(rememberKey, url).apply()
+                    onUrl(url)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+        input.requestFocus()
+    }
+
+    /** Downloads an image, shrinks it to fit [maxW]×[maxH], and saves it. */
+    private fun saveImageFromLink(url: String, target: File, maxW: Int, maxH: Int, done: (Boolean) -> Unit) {
+        toast("Downloading picture…")
+        Thread {
+            var ok = false
+            try {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.instanceFollowRedirects = true
+                conn.connectTimeout = 10000
+                conn.readTimeout = 20000
+                conn.setRequestProperty("User-Agent", "FamilyHub")
+                val bytes = conn.inputStream.use { it.readBytes() }
+                conn.disconnect()
+                val bounds = BitmapFactory.Options()
+                bounds.inJustDecodeBounds = true
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                var sample = 1
+                while (bounds.outWidth / (sample * 2) >= maxW && bounds.outHeight / (sample * 2) >= maxH) sample *= 2
+                val opts = BitmapFactory.Options()
+                opts.inSampleSize = sample
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                if (bmp != null) {
+                    val format = if (target.name.endsWith(".png")) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+                    FileOutputStream(target).use { out -> bmp.compress(format, 90, out) }
+                    ok = true
+                }
+            } catch (e: Exception) {
+                ok = false
+            }
+            val result = ok
+            main.post {
+                if (!result) toast("Couldn't use that link. It needs to point straight at a .jpg or .png.")
+                done(result)
+            }
+        }.start()
+    }
+
+    // ---------------------------------------------------------------- kids time and PIN
+
+    private fun kidsFrom() = prefs.getInt("kids_from", KIDS_FROM_DEFAULT)
+    private fun kidsUntil() = prefs.getInt("kids_until", KIDS_UNTIL_DEFAULT)
+    private fun hasPin() = prefs.getString("pin_hash", null) != null
+
+    /** Kids hours; works across midnight too (for example 20 until 7). */
+    private fun inKidsHours(hour: Int): Boolean {
+        val from = kidsFrom()
+        val until = kidsUntil()
+        return if (from <= until) hour in from until until else hour >= from || hour < until
+    }
+
+    private fun isKidsTime(): Boolean {
+        if (!prefs.getBoolean("kids_lock", false) || !hasPin()) return false
+        return inKidsHours(Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
+    }
+
+    private fun needsPin(): Boolean = isKidsTime() && System.currentTimeMillis() > unlockedUntil
+
+    private fun kidsSummary(): String {
+        val range = String.format(Locale.UK, "%02d:00–%02d:00", kidsFrom(), kidsUntil())
+        return if (prefs.getBoolean("kids_lock", false) && hasPin()) "PIN on, $range" else "PIN off, Kids row first $range"
+    }
+
+    private fun hashPin(pin: String): String {
+        val d = MessageDigest.getInstance("SHA-256").digest(("familyhub:" + pin).toByteArray())
+        return d.joinToString("") { String.format("%02x", it) }
+    }
+
+    /** Runs [action] straight away, or after the right PIN if it's kids time and not recently unlocked. */
+    private fun requirePin(action: () -> Unit) {
+        if (!needsPin()) {
+            action()
+            return
+        }
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        input.setSingleLine(true)
+        val box = FrameLayout(this)
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle("Kids time: enter the PIN")
+            .setView(box)
+            .setPositiveButton("OK") { _, _ ->
+                if (hashPin(input.text.toString().trim()) == prefs.getString("pin_hash", "")) {
+                    unlockedUntil = System.currentTimeMillis() + prefs.getInt("unlock_minutes", 30) * 60_000L
+                    action()
+                } else {
+                    toast("Wrong PIN.")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+        input.requestFocus()
+    }
+
+    private fun showKidsDialog() {
+        val lockOn = prefs.getBoolean("kids_lock", false) && hasPin()
+        val items = listOf<Pair<String, () -> Unit>>(
+            (if (lockOn) "PIN lock in kids time: On" else "PIN lock in kids time: Off") to {
+                if (lockOn) {
+                    prefs.edit().putBoolean("kids_lock", false).apply()
+                    showKidsDialog()
+                } else if (!hasPin()) {
+                    setNewPin { prefs.edit().putBoolean("kids_lock", true).apply(); showKidsDialog() }
+                } else {
+                    prefs.edit().putBoolean("kids_lock", true).apply()
+                    showKidsDialog()
+                }
+            },
+            String.format(Locale.UK, "Kids time starts: %02d:00", kidsFrom()) to {
+                pickHour("Kids time starts at", kidsFrom()) { h -> prefs.edit().putInt("kids_from", h).apply(); showKidsDialog() }
+            },
+            String.format(Locale.UK, "Kids time ends: %02d:00", kidsUntil()) to {
+                pickHour("Kids time ends at", kidsUntil()) { h -> prefs.edit().putInt("kids_until", h).apply(); showKidsDialog() }
+            },
+            "After the PIN, stay unlocked for: ${prefs.getInt("unlock_minutes", 30)} min" to { pickUnlockMinutes() },
+            (if (hasPin()) "Change PIN" else "Set a PIN") to { setNewPin { showKidsDialog() } },
+        )
+        AlertDialog.Builder(this)
+            .setTitle("Kids time & PIN")
+            .setMessage("In kids time the Kids row comes first. With the PIN lock on, anything outside the Kids group (and settings) needs the PIN. Outside kids time nothing is locked.")
+            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
+            .setNegativeButton("Done") { _, _ -> buildRows() }
+            .show()
+    }
+
+    private fun pickHour(title: String, current: Int, done: (Int) -> Unit) {
+        val hours = (0..23).map { String.format(Locale.UK, "%02d:00", it) }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setSingleChoiceItems(hours, current) { dialog, which ->
+                dialog.dismiss()
+                done(which)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun pickUnlockMinutes() {
+        val choices = intArrayOf(5, 15, 30, 60, 120)
+        val labels = choices.map { "$it minutes" }.toTypedArray()
+        val current = choices.indexOf(prefs.getInt("unlock_minutes", 30))
+        AlertDialog.Builder(this)
+            .setTitle("Stay unlocked for")
+            .setSingleChoiceItems(labels, current) { dialog, which ->
+                prefs.edit().putInt("unlock_minutes", choices[which]).apply()
+                dialog.dismiss()
+                showKidsDialog()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Asks for a new 4–8 digit PIN twice. */
+    private fun setNewPin(done: () -> Unit) {
+        fun ask(title: String, next: (String) -> Unit) {
+            val input = EditText(this)
+            input.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            input.setSingleLine(true)
+            val box = FrameLayout(this)
+            box.setPadding(dp(20), dp(8), dp(20), 0)
+            box.addView(input)
+            AlertDialog.Builder(this)
+                .setTitle(title)
+                .setView(box)
+                .setPositiveButton("OK") { _, _ -> next(input.text.toString().trim()) }
+                .setNegativeButton("Cancel", null)
+                .show()
+            input.requestFocus()
+        }
+        ask("New PIN (4 to 8 digits)") { first ->
+            if (first.length < 4 || first.length > 8 || first.any { !it.isDigit() }) {
+                toast("The PIN needs 4 to 8 digits.")
+            } else {
+                ask("Type the PIN again") { second ->
+                    if (second != first) {
+                        toast("Those didn't match. Try again.")
+                    } else {
+                        prefs.edit().putString("pin_hash", hashPin(first)).apply()
+                        toast("PIN saved.")
+                        done()
+                    }
+                }
             }
         }
     }
@@ -701,7 +1146,17 @@ class MainActivity : Activity() {
         return G_OTHER
     }
 
+    /** Opens an app. In kids time, anything outside the Kids group asks for the PIN first. */
     private fun launch(pkg: String) {
+        val app = apps[pkg]
+        if (app != null && needsPin() && groupOf(app) != G_KIDS) {
+            requirePin { launchNow(pkg) }
+            return
+        }
+        launchNow(pkg)
+    }
+
+    private fun launchNow(pkg: String) {
         val pm = packageManager
         val intent = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg)
         if (intent == null) {
@@ -718,6 +1173,10 @@ class MainActivity : Activity() {
     }
 
     private fun openSettings() {
+        if (needsPin()) {
+            requirePin { openSettings() }
+            return
+        }
         try {
             startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (e: Exception) {
@@ -964,6 +1423,10 @@ class MainActivity : Activity() {
     private var statusKind: String? = null
 
     private fun openStatusSettings() {
+        if (needsPin()) {
+            requirePin { openStatusSettings() }
+            return
+        }
         val action = if (statusKind == "No internet") Settings.ACTION_WIFI_SETTINGS else Settings.ACTION_INTERNAL_STORAGE_SETTINGS
         try {
             startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -1001,17 +1464,12 @@ class MainActivity : Activity() {
     private fun showSleepDialog() {
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         if (!dpm.isAdminActive(sleepAdmin())) {
-            // One-time approval: Fire OS asks whether Family Hub may switch the screen off.
-            try {
-                startActivity(
-                    Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
-                        .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, sleepAdmin())
-                        .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Lets the sleep timer switch the TV off. Nothing else.")
-                )
-                toast("Approve it, then press Sleep again to set the timer.")
-            } catch (e: Exception) {
-                toast("This Fire Stick won't allow the sleep timer without a computer. We can set it up with the Home button.")
-            }
+            // Fire OS hides the approval screen (it opens blank), so this needs one ADB command. See README.
+            AlertDialog.Builder(this)
+                .setTitle("Sleep timer")
+                .setMessage("Fire OS won't let the sleep timer be switched on from the TV. It needs a one-time setup from a computer (one command, in the README). After that it works from here.")
+                .setPositiveButton("OK", null)
+                .show()
             return
         }
         val active = prefs.getLong("sleep_at", 0L) > System.currentTimeMillis()
@@ -1206,6 +1664,8 @@ class MainActivity : Activity() {
 
     /** The app's wide TV banner if it has one, else null. */
     private fun bannerOf(app: AppEntry): Drawable? {
+        val custom = customArt(app.pkg)
+        if (custom != null) return custom
         val pm = packageManager
         return try {
             app.info.loadBanner(pm) ?: pm.getApplicationBanner(app.pkg)
