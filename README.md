@@ -11,7 +11,7 @@ used most.
   Music & audio, Games, Tools & settings, Amazon and Other (A–Z within each). Up from the top row, or
   Back, closes it.
 - **Hold OK on any app** for a menu: Add to / Remove from Favourites, Move to front of Favourites,
-  Move to group, Uninstall (apps you installed), Hide. "Show hidden" in the drawer's Tools group brings hidden apps back.
+  Move to group, Uninstall (apps you installed), Hide. Hidden apps sit faded in a Hidden section at the bottom of All apps; OK on one gives Unhide, Open or Uninstall.
 - Clock, date, a greeting (press OK on it to set the name) and the weather (Open-Meteo, no account). Press OK on the weather to set the place: type a town and pick it from the list.
 - **Add app** in the top bar: type or paste a link to an .apk and Family Hub downloads and installs it (Fire OS asks first). No Downloader needed.
 - **Update ready** appears in the top bar when a newer build is on GitHub: press OK to install it.

@@ -364,7 +364,7 @@ class MainActivity : Activity() {
         val recent = ArrayList<AppEntry>()
         for (pkg in recentPackages()) {
             val app = apps[pkg] ?: continue
-            if (HIDDEN.contains(pkg)) continue
+            if (HIDDEN.contains(pkg) || hiddenByUser.contains(pkg)) continue
             recent.add(app)
             if (recent.size == 3) break
         }
@@ -388,7 +388,10 @@ class MainActivity : Activity() {
         kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
 
         orderRows()
-        buildDrawer(visible, hiddenByUser.size)
+        val hiddenApps = apps.values
+            .filter { hiddenByUser.contains(it.pkg) && !HIDDEN.contains(it.pkg) }
+            .sortedBy { it.label.lowercase(Locale.UK) }
+        buildDrawer(visible, hiddenApps)
 
         if (allPanel.visibility == View.VISIBLE) {
             firstGridTile()?.requestFocus()
@@ -431,7 +434,7 @@ class MainActivity : Activity() {
     }
 
     /** The drawer: grouped (Streaming, Kids, Music…), A–Z within each group, five per row. */
-    private fun buildDrawer(visible: List<AppEntry>, hiddenCount: Int) {
+    private fun buildDrawer(visible: List<AppEntry>, hiddenApps: List<AppEntry>) {
         allGrid.removeAllViews()
         firstGridRow = null
         val groups = LinkedHashMap<String, ArrayList<View>>()
@@ -441,15 +444,16 @@ class MainActivity : Activity() {
         }
         val tools = groups.getValue(G_TOOLS)
         tools.add(tile("Settings", CARD_DIM, TEXT) { openSettings() })
-        if (hiddenCount > 0) {
-            tools.add(tile("Show hidden ($hiddenCount)", CARD_DIM, MUTED) {
-                prefs.edit().remove("hidden").apply()
-                buildRows()
-            })
+        // Hidden apps get their own section at the very bottom, faded. OK on one opens its menu.
+        val hiddenTitle = "Hidden"
+        groups[hiddenTitle] = ArrayList()
+        for (app in hiddenApps) {
+            groups.getValue(hiddenTitle).add(artTile(app, dim = true, onClick = { showHiddenMenu(app) }))
         }
         for ((title, views) in groups) {
             if (views.isEmpty()) continue
-            allGrid.addView(text(title, 15f, TEXT, bold = true), fullWidth(if (allGrid.childCount == 0) 0 else dp(20)))
+            val heading = if (title == hiddenTitle) "Hidden  ·  press OK on an app to bring it back" else title
+            allGrid.addView(text(heading, 15f, if (title == hiddenTitle) MUTED else TEXT, bold = true), fullWidth(if (allGrid.childCount == 0) 0 else dp(20)))
             var gridRow: LinearLayout? = null
             views.forEachIndexed { i, v ->
                 if (i % 5 == 0) {
@@ -538,7 +542,7 @@ class MainActivity : Activity() {
             next.add(app.pkg)
             prefs.edit().putStringSet("hidden", next).apply()
             setFavourites(favourites().filter { it != app.pkg })
-            toast("Hid ${app.label}. \"Show hidden\" in All apps › Tools brings it back.")
+            toast("Hid ${app.label}. It's in the Hidden section at the bottom of All apps.")
         }
 
         AlertDialog.Builder(this)
@@ -556,6 +560,33 @@ class MainActivity : Activity() {
             .setTitle("Move ${app.label} to")
             .setItems(GROUP_ORDER.toTypedArray()) { _, which ->
                 prefs.edit().putString("group_${app.pkg}", GROUP_ORDER[which]).apply()
+                buildRows()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** The menu for an app in the Hidden section. */
+    private fun showHiddenMenu(app: AppEntry) {
+        val labels = arrayListOf("Unhide", "Open")
+        val actions = arrayListOf<() -> Unit>(
+            {
+                val next = HashSet(hiddenSet())
+                next.remove(app.pkg)
+                prefs.edit().putStringSet("hidden", next).apply()
+                toast("${app.label} is back in All apps.")
+            },
+            { launch(app.pkg) }
+        )
+        val isSystem = (app.info.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+        if (!isSystem) {
+            labels.add("Uninstall")
+            actions.add { uninstall(app) }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(app.label + " (hidden)")
+            .setItems(labels.toTypedArray()) { _, which ->
+                actions[which]()
                 buildRows()
             }
             .setNegativeButton("Cancel", null)
@@ -1059,7 +1090,8 @@ class MainActivity : Activity() {
     }
 
     /** Ring and grow on focus, OK to open, hold OK for the menu. */
-    private fun makeTile(v: View, bg: Int, radiusDp: Int, onClick: () -> Unit, onHold: (() -> Unit)?) {
+    private fun makeTile(v: View, bg: Int, radiusDp: Int, onClick: () -> Unit, onHold: (() -> Unit)?, dim: Boolean = false) {
+        v.alpha = if (dim) 0.45f else 1f
         v.isFocusable = true
         v.isClickable = true
         v.background = rounded(bg, false, radiusDp)
@@ -1076,6 +1108,7 @@ class MainActivity : Activity() {
             val scale = if (hasFocus) 1.08f else 1f
             view.animate().scaleX(scale).scaleY(scale).setDuration(120L).start()
             view.translationZ = if (hasFocus) dp(8).toFloat() else 0f
+            if (dim) view.alpha = if (hasFocus) 1f else 0.45f
         }
     }
 
@@ -1083,7 +1116,9 @@ class MainActivity : Activity() {
      * A 16:9 tile filled edge to edge by the app's banner. Apps without one get their icon
      * and name instead. The 3 dp inset leaves room for the white focus ring.
      */
-    private fun artTile(app: AppEntry): View {
+    private fun artTile(app: AppEntry, dim: Boolean = false, onClick: (() -> Unit)? = null): View {
+        val open = onClick ?: { launch(app.pkg) }
+        val hold: () -> Unit = onClick ?: { showAppMenu(app) }
         val banner = bannerOf(app)
         if (banner != null) {
             val box = FrameLayout(this)
@@ -1095,7 +1130,7 @@ class MainActivity : Activity() {
             img.background = rounded(Color.TRANSPARENT, false, 9)
             box.addView(img, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             box.contentDescription = app.label
-            makeTile(box, CARD, 12, { launch(app.pkg) }, { showAppMenu(app) })
+            makeTile(box, CARD, 12, open, hold, dim)
             return box
         }
         val box = LinearLayout(this)
@@ -1114,7 +1149,7 @@ class MainActivity : Activity() {
         label.gravity = Gravity.CENTER
         box.addView(label, margins(0, dp(4), 0, 0))
         box.contentDescription = app.label
-        makeTile(box, CARD, 12, { launch(app.pkg) }, { showAppMenu(app) })
+        makeTile(box, CARD, 12, open, hold, dim)
         return box
     }
 
@@ -1219,7 +1254,7 @@ class MainActivity : Activity() {
         return s
     }
 
-    /** A plain text tile (Settings, Show hidden). */
+    /** A plain text tile (Settings). */
     private fun tile(title: String, bg: Int, fg: Int, onClick: () -> Unit): View {
         val label = text(title, 14f, fg, bold = true)
         label.gravity = Gravity.CENTER
