@@ -95,7 +95,6 @@ class MainActivity : Activity() {
     private lateinit var favRow: LinearLayout
     private lateinit var kidsSection: LinearLayout
     private lateinit var kidsRow: LinearLayout
-    private lateinit var appsRow: LinearLayout
     private lateinit var allPanel: LinearLayout
     private lateinit var allGrid: LinearLayout
     private var allAppsTile: View? = null
@@ -197,9 +196,22 @@ class MainActivity : Activity() {
         kidsSection = section("Kids", kidsRow)
         column.addView(kidsSection, fullWidth(dp(10)))
 
-        // Five more apps and an "All apps" tile. No sideways scrolling.
-        appsRow = row()
-        column.addView(section("Apps", appsRow), fullWidth(dp(10)))
+        // Push the drawer handle to the bottom of the screen.
+        column.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
+
+        // Drawer handle: landing on it (pressing down from the last row) slides the app drawer up.
+        val handle = text("↓   All apps", 14f, MUTED, bold = true)
+        handle.gravity = Gravity.CENTER
+        handle.setPadding(dp(18), dp(8), dp(18), dp(8))
+        handle.isFocusable = true
+        handle.isClickable = true
+        handle.background = rounded(BG, false, 999)
+        handle.setOnClickListener { openAllApps() }
+        handle.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) openAllApps() }
+        allAppsTile = handle
+        val handleLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        handleLp.gravity = Gravity.CENTER_HORIZONTAL
+        column.addView(handle, handleLp)
 
         // All apps: a full-screen grid on top, closed with Back.
         allPanel = LinearLayout(this)
@@ -210,7 +222,7 @@ class MainActivity : Activity() {
         allPanel.clipChildren = false
         val head = text("All apps", 22f, TEXT, bold = true)
         allPanel.addView(head)
-        allPanel.addView(text("Hold OK on an app to hide it  ·  Back to close", 12f, MUTED), fullWidth(dp(2)))
+        allPanel.addView(text("A–Z  ·  Hold OK on an app to hide it  ·  Up or Back to close", 12f, MUTED), fullWidth(dp(2)))
         allGrid = LinearLayout(this)
         allGrid.orientation = LinearLayout.VERTICAL
         allGrid.clipChildren = false
@@ -250,7 +262,7 @@ class MainActivity : Activity() {
         }
         recent.forEachIndexed { i, app ->
             val view = jumpTile(app)
-            val lp = LinearLayout.LayoutParams(0, dp(92), 1f)
+            val lp = LinearLayout.LayoutParams(0, dp(104), 1f)
             if (i < recent.size - 1) lp.marginEnd = dp(16)
             jumpRow.addView(view, lp)
         }
@@ -269,7 +281,7 @@ class MainActivity : Activity() {
                 used.add(app.pkg)
                 view = artTile(app, CARD)
             }
-            val lp = LinearLayout.LayoutParams(0, dp(60), 1f)
+            val lp = LinearLayout.LayoutParams(0, dp(68), 1f)
             if (i < favs.size - 1) lp.marginEnd = dp(12)
             favRow.addView(view, lp)
         }
@@ -281,34 +293,22 @@ class MainActivity : Activity() {
         kids.forEachIndexed { i, p ->
             used.add(p.second.pkg)
             val view = artTile(p.second, ACCENT)
-            val lp = LinearLayout.LayoutParams(0, dp(60), 1f)
+            val lp = LinearLayout.LayoutParams(0, dp(68), 1f)
             if (i < kids.size - 1) lp.marginEnd = dp(12)
             kidsRow.addView(view, lp)
         }
         // Keep the row evenly sized when there are only one or two kids' apps.
         for (j in kids.size until 4) {
-            kidsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(60), 1f).also { it.marginStart = dp(12) })
+            kidsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(68), 1f).also { it.marginStart = dp(12) })
         }
         kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
 
         // Apps
-        // Apps: most recently used first, then A–Z. Five on the home screen, all in the grid.
+        // The app drawer: every app, A–Z, including the ones on the home screen.
         val hiddenByUser = prefs.getStringSet("hidden", emptySet()) ?: emptySet()
         val rest = apps.values
-            .filter { !used.contains(it.pkg) && !HIDDEN.contains(it.pkg) && !hiddenByUser.contains(it.pkg) }
-            .sortedWith(compareByDescending<AppEntry> { lastOpened(it) }.thenBy { it.label.lowercase(Locale.UK) })
-
-        appsRow.removeAllViews()
-        val onHome = rest.take(5)
-        for (app in onHome) {
-            appsRow.addView(appTile(app), LinearLayout.LayoutParams(0, dp(52), 1f).also { it.marginEnd = dp(10) })
-        }
-        for (j in onHome.size until 5) {
-            appsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(52), 1f).also { it.marginEnd = dp(10) })
-        }
-        val all = tile("All apps", null, CARD, TEXT, 14f) { openAllApps() }
-        allAppsTile = all
-        appsRow.addView(all, LinearLayout.LayoutParams(0, dp(52), 1f))
+            .filter { !HIDDEN.contains(it.pkg) && !hiddenByUser.contains(it.pkg) }
+            .sortedBy { it.label.lowercase(Locale.UK) }
 
         // The All apps grid, five per row.
         allGrid.removeAllViews()
@@ -365,16 +365,46 @@ class MainActivity : Activity() {
     }
 
     private fun openAllApps() {
+        if (allPanel.visibility == View.VISIBLE) return
         allPanel.visibility = View.VISIBLE
-        // Keep the remote inside the grid while it's open.
+        // Keep the remote inside the drawer while it's open.
         homeColumn.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+        val h = resources.displayMetrics.heightPixels.toFloat()
+        allPanel.translationY = h
+        allPanel.animate().translationY(0f).setDuration(220L).start()
         firstGridTile()?.requestFocus()
     }
 
+    /** The bottom-most visible tile on the home screen, where focus lands when the drawer closes. */
+    private fun lastHomeTile(): View? {
+        if (kidsSection.visibility == View.VISIBLE && kidsRow.childCount > 0) return kidsRow.getChildAt(0)
+        return favRow.getChildAt(0) ?: jumpRow.getChildAt(0)
+    }
+
+    // Up from the drawer's first row closes it.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            event.keyCode == KeyEvent.KEYCODE_DPAD_UP &&
+            allPanel.visibility == View.VISIBLE
+        ) {
+            val firstRow = allGrid.getChildAt(0)
+            val focused = currentFocus
+            if (firstRow != null && focused != null && focused.parent == firstRow) {
+                closeAllApps()
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     private fun closeAllApps() {
-        allPanel.visibility = View.GONE
         homeColumn.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
-        allAppsTile?.requestFocus()
+        lastHomeTile()?.requestFocus()
+        val h = resources.displayMetrics.heightPixels.toFloat()
+        allPanel.animate().translationY(h).setDuration(180L).withEndAction {
+            allPanel.visibility = View.GONE
+            allPanel.translationY = 0f
+        }.start()
     }
 
     // ---------------------------------------------------------------- apps
