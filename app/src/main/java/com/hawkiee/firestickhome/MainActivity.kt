@@ -6,8 +6,10 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
@@ -20,6 +22,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.ScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -33,7 +36,7 @@ import java.util.Date
 import java.util.Locale
 
 /** An installed app we can open. */
-data class AppEntry(val pkg: String, val label: String)
+data class AppEntry(val pkg: String, val label: String, val info: ActivityInfo)
 
 /**
  * An app we want on the home screen. Matched by package name first, then by its label,
@@ -162,7 +165,7 @@ class MainActivity : Activity() {
         top.gravity = Gravity.CENTER_VERTICAL
         top.clipChildren = false
 
-        clockView = text("--:--", 40f, TEXT, light = true)
+        clockView = text("--:--", 34f, TEXT, light = true)
         top.addView(clockView)
 
         dateView = text("", 14f, MUTED)
@@ -187,16 +190,16 @@ class MainActivity : Activity() {
 
         // Favourites: always in the same place.
         favRow = row()
-        column.addView(section("Favourites", favRow), fullWidth(dp(12)))
+        column.addView(section("Favourites", favRow), fullWidth(dp(10)))
 
         // Kids.
         kidsRow = row()
         kidsSection = section("Kids", kidsRow)
-        column.addView(kidsSection, fullWidth(dp(12)))
+        column.addView(kidsSection, fullWidth(dp(10)))
 
         // Five more apps and an "All apps" tile. No sideways scrolling.
         appsRow = row()
-        column.addView(section("Apps", appsRow), fullWidth(dp(12)))
+        column.addView(section("Apps", appsRow), fullWidth(dp(10)))
 
         // All apps: a full-screen grid on top, closed with Back.
         allPanel = LinearLayout(this)
@@ -246,8 +249,8 @@ class MainActivity : Activity() {
             if (recent.none { it.pkg == app.pkg }) recent.add(app)
         }
         recent.forEachIndexed { i, app ->
-            val view = tile(app.label, lastOpenedText(app), CARD, TEXT, 22f) { launch(app.pkg) }
-            val lp = LinearLayout.LayoutParams(0, dp(108), 1f)
+            val view = jumpTile(app)
+            val lp = LinearLayout.LayoutParams(0, dp(92), 1f)
             if (i < recent.size - 1) lp.marginEnd = dp(16)
             jumpRow.addView(view, lp)
         }
@@ -259,14 +262,14 @@ class MainActivity : Activity() {
             val app = p.second
             val view: View
             if (app == null) {
-                view = tile(w.name, null, CARD_DIM, MUTED, 16f) {
+                view = tile(w.name + " · not installed", null, CARD_DIM, MUTED, 14f) {
                     toast("${w.name} isn't installed. Get it from the Appstore.")
                 }
             } else {
                 used.add(app.pkg)
-                view = tile(w.name, null, CARD, TEXT, 16f) { launch(app.pkg) }
+                view = artTile(app, CARD)
             }
-            val lp = LinearLayout.LayoutParams(0, dp(50), 1f)
+            val lp = LinearLayout.LayoutParams(0, dp(60), 1f)
             if (i < favs.size - 1) lp.marginEnd = dp(12)
             favRow.addView(view, lp)
         }
@@ -277,14 +280,14 @@ class MainActivity : Activity() {
             .filter { !used.contains(it.second.pkg) }
         kids.forEachIndexed { i, p ->
             used.add(p.second.pkg)
-            val view = tile(p.first.name, null, ACCENT, BG, 16f) { launch(p.second.pkg) }
-            val lp = LinearLayout.LayoutParams(0, dp(50), 1f)
+            val view = artTile(p.second, ACCENT)
+            val lp = LinearLayout.LayoutParams(0, dp(60), 1f)
             if (i < kids.size - 1) lp.marginEnd = dp(12)
             kidsRow.addView(view, lp)
         }
         // Keep the row evenly sized when there are only one or two kids' apps.
         for (j in kids.size until 4) {
-            kidsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(50), 1f).also { it.marginStart = dp(12) })
+            kidsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(60), 1f).also { it.marginStart = dp(12) })
         }
         kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
 
@@ -298,14 +301,14 @@ class MainActivity : Activity() {
         appsRow.removeAllViews()
         val onHome = rest.take(5)
         for (app in onHome) {
-            appsRow.addView(appTile(app), LinearLayout.LayoutParams(0, dp(48), 1f).also { it.marginEnd = dp(10) })
+            appsRow.addView(appTile(app), LinearLayout.LayoutParams(0, dp(52), 1f).also { it.marginEnd = dp(10) })
         }
         for (j in onHome.size until 5) {
-            appsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(48), 1f).also { it.marginEnd = dp(10) })
+            appsRow.addView(View(this), LinearLayout.LayoutParams(0, dp(52), 1f).also { it.marginEnd = dp(10) })
         }
         val all = tile("All apps", null, CARD, TEXT, 14f) { openAllApps() }
         allAppsTile = all
-        appsRow.addView(all, LinearLayout.LayoutParams(0, dp(48), 1f))
+        appsRow.addView(all, LinearLayout.LayoutParams(0, dp(52), 1f))
 
         // The All apps grid, five per row.
         allGrid.removeAllViews()
@@ -325,12 +328,12 @@ class MainActivity : Activity() {
                 allGrid.addView(r, fullWidth(if (i == 0) 0 else dp(14)))
                 gridRow = r
             }
-            gridRow?.addView(v, LinearLayout.LayoutParams(0, dp(56), 1f).also { if (i % 5 != 4) it.marginEnd = dp(14) })
+            gridRow?.addView(v, LinearLayout.LayoutParams(0, dp(88), 1f).also { if (i % 5 != 4) it.marginEnd = dp(14) })
         }
         val leftover = gridTiles.size % 5
         if (leftover != 0) {
             for (j in leftover until 5) {
-                gridRow?.addView(View(this), LinearLayout.LayoutParams(0, dp(56), 1f).also { if (j != 4) it.marginEnd = dp(14) })
+                gridRow?.addView(View(this), LinearLayout.LayoutParams(0, dp(88), 1f).also { if (j != 4) it.marginEnd = dp(14) })
             }
         }
 
@@ -344,7 +347,7 @@ class MainActivity : Activity() {
 
     /** An app tile: OK opens it, holding OK hides it. */
     private fun appTile(app: AppEntry): View {
-        val view = tile(app.label, null, CARD_DIM, TEXT, 14f) { launch(app.pkg) }
+        val view = artTile(app, CARD_DIM)
         view.setOnLongClickListener {
             val next = HashSet(prefs.getStringSet("hidden", emptySet()) ?: emptySet())
             next.add(app.pkg)
@@ -386,7 +389,7 @@ class MainActivity : Activity() {
             for (info in found) {
                 val pkg = info.activityInfo.packageName
                 if (pkg == packageName || out.containsKey(pkg)) continue
-                out[pkg] = AppEntry(pkg, info.loadLabel(pm).toString())
+                out[pkg] = AppEntry(pkg, info.loadLabel(pm).toString(), info.activityInfo)
             }
         }
         return out
@@ -590,12 +593,115 @@ class MainActivity : Activity() {
         s.orientation = LinearLayout.VERTICAL
         s.clipChildren = false
         s.clipToPadding = false
-        s.addView(text(title, 14f, TEXT, bold = true), margins(0, 0, 0, dp(8)))
+        s.addView(text(title, 14f, TEXT, bold = true), margins(0, 0, 0, dp(6)))
         s.addView(
             content,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         )
         return s
+    }
+
+    // ---------------------------------------------------------------- app artwork
+
+    /** The app's wide TV banner if it has one, else null. */
+    private fun bannerOf(app: AppEntry): Drawable? {
+        val pm = packageManager
+        return try {
+            app.info.loadBanner(pm) ?: pm.getApplicationBanner(app.pkg)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun iconOf(app: AppEntry): Drawable? {
+        return try {
+            app.info.loadIcon(packageManager)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Makes a view behave like a tile: ring and grow on focus, OK to open. */
+    private fun makeTile(v: View, bg: Int, onClick: () -> Unit) {
+        v.isFocusable = true
+        v.isClickable = true
+        v.background = rounded(bg, false)
+        v.clipToOutline = true
+        v.setOnClickListener { onClick() }
+        v.setOnFocusChangeListener { view, hasFocus ->
+            view.background = rounded(bg, hasFocus)
+            val scale = if (hasFocus) 1.06f else 1f
+            view.animate().scaleX(scale).scaleY(scale).setDuration(120L).start()
+            view.translationZ = if (hasFocus) dp(8).toFloat() else 0f
+        }
+    }
+
+    /**
+     * A tile showing the app's banner. Apps without a banner get their icon and name.
+     * The 3 dp inset leaves room for the white focus ring around the picture.
+     */
+    private fun artTile(app: AppEntry, bg: Int): View {
+        val banner = bannerOf(app)
+        if (banner != null) {
+            val box = FrameLayout(this)
+            box.setPadding(dp(3), dp(3), dp(3), dp(3))
+            val img = ImageView(this)
+            img.setImageDrawable(banner)
+            img.scaleType = ImageView.ScaleType.FIT_CENTER
+            img.clipToOutline = true
+            img.background = rounded(Color.TRANSPARENT, false, 13)
+            box.addView(img, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            box.contentDescription = app.label
+            makeTile(box, bg) { launch(app.pkg) }
+            return box
+        }
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.HORIZONTAL
+        box.gravity = Gravity.CENTER
+        box.setPadding(dp(10), dp(6), dp(10), dp(6))
+        val icon = iconOf(app)
+        if (icon != null) {
+            val img = ImageView(this)
+            img.setImageDrawable(icon)
+            img.scaleType = ImageView.ScaleType.FIT_CENTER
+            box.addView(img, LinearLayout.LayoutParams(dp(32), dp(32)).also { it.marginEnd = dp(8) })
+        }
+        val fg = if (bg == ACCENT) BG else TEXT
+        val label = text(app.label, 13f, fg, bold = true)
+        label.maxLines = 1
+        box.addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        box.contentDescription = app.label
+        makeTile(box, bg) { launch(app.pkg) }
+        return box
+    }
+
+    /** A big Jump back in tile: banner on the left, name and when on the right. */
+    private fun jumpTile(app: AppEntry): View {
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.HORIZONTAL
+        box.gravity = Gravity.CENTER_VERTICAL
+        box.setPadding(dp(3), dp(3), dp(12), dp(3))
+        val art = bannerOf(app) ?: iconOf(app)
+        if (art != null) {
+            val img = ImageView(this)
+            img.setImageDrawable(art)
+            img.scaleType = ImageView.ScaleType.FIT_CENTER
+            img.clipToOutline = true
+            img.background = rounded(Color.TRANSPARENT, false, 13)
+            box.addView(img, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.1f))
+        }
+        val words = LinearLayout(this)
+        words.orientation = LinearLayout.VERTICAL
+        words.gravity = Gravity.CENTER_VERTICAL
+        words.setPadding(dp(12), 0, 0, 0)
+        val name = text(app.label, 17f, TEXT, bold = true)
+        name.maxLines = 2
+        words.addView(name)
+        words.addView(text(lastOpenedText(app), 11f, MUTED))
+        box.addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        box.contentDescription = app.label
+        makeTile(box, CARD) { launch(app.pkg) }
+        return box
     }
 
     /** A focusable card. It grows and gets a white ring when the remote lands on it. */
