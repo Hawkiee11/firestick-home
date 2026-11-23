@@ -9,7 +9,7 @@ used most.
 - **Kids**: the apps in the Kids group. In the daytime (6am–7pm) this row sits above Favourites.
 - **App drawer**: press down from the last row and every app slides up, grouped into Streaming, Kids,
   Music & audio, Games, Tools & settings, Amazon and Other (A–Z within each). Up from the top row, or
-  Back, closes it.
+  Back, closes it. ⏪ and ⏩ jump a whole group at a time.
 - **Hold OK (or press ☰) on any app** for a menu: Add to / Remove from Favourites, Move left / right / to front,
   Move to group, Uninstall (apps you installed), Hide. Hidden apps sit faded in a Hidden section at the bottom of All apps; OK on one gives Unhide, Open or Uninstall.
 - Clock, date, a greeting (press OK on it to set the name) and the weather (Open-Meteo, no account). Press OK on the weather to set the place: type a town and pick it from the list.
@@ -27,6 +27,8 @@ used most.
 
 - **Settings** in the top bar opens Family Hub settings:
   - **Theme**: Navy, Midnight, Slate, Forest, Plum or Ember.
+  - **Text size**: Normal or Large.
+  - **Clock**: 24-hour or 12-hour.
   - **Wallpaper**: Plain, Soft glow, Gradient, or a photo from a link (shown under a dark veil so text
     stays readable).
   - **App pictures**: one list of every app; pick one, give it a picture from a link, and the list comes

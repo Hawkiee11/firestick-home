@@ -153,6 +153,7 @@ class MainActivity : Activity() {
     private lateinit var wallpaperImage: ImageView
     private lateinit var wallpaperVeil: View
     private var unlockedUntil = 0L
+    private var textScale = 1f
     private lateinit var clockView: TextView
     private lateinit var dateView: TextView
     private lateinit var namePrompt: TextView
@@ -169,6 +170,11 @@ class MainActivity : Activity() {
     private lateinit var allPanel: LinearLayout
     private lateinit var allGrid: LinearLayout
     private var firstGridRow: LinearLayout? = null
+    private lateinit var gridScroll: ScrollView
+    // Drawer groups for ⏪ ⏩: each group's heading and first row, and which group each row is in.
+    private val groupHeadings = ArrayList<View>()
+    private val groupFirstRows = ArrayList<LinearLayout>()
+    private val rowGroup = HashMap<View, Int>()
 
     private var apps: Map<String, AppEntry> = emptyMap()
     private var recentTimes: Map<String, Long> = emptyMap()
@@ -267,6 +273,16 @@ class MainActivity : Activity() {
 
     // ☰ on an app tile opens its menu; Up from the drawer's first row closes the drawer.
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && allPanel.visibility == View.VISIBLE &&
+            (event.keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD || event.keyCode == KeyEvent.KEYCODE_MEDIA_REWIND)
+        ) {
+            if (groupFirstRows.isEmpty()) return true
+            val row = currentFocus?.parent as? View
+            val here = if (row != null) rowGroup[row] ?: 0 else 0
+            val step = if (event.keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) 1 else -1
+            jumpToGroup((here + step).coerceIn(0, groupFirstRows.size - 1))
+            return true
+        }
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_MENU) {
             val pkg = currentFocus?.tag as? String
             val app = if (pkg != null) apps[pkg] else null
@@ -414,7 +430,7 @@ class MainActivity : Activity() {
         allGrid.clipChildren = false
         allGrid.clipToPadding = false
         allGrid.setPadding(dp(6), dp(10), dp(6), dp(24))
-        val gridScroll = ScrollView(this)
+        gridScroll = ScrollView(this)
         gridScroll.isVerticalScrollBarEnabled = false
         gridScroll.clipChildren = false
         gridScroll.clipToPadding = false
@@ -513,6 +529,9 @@ class MainActivity : Activity() {
     private fun buildDrawer(visible: List<AppEntry>, hiddenApps: List<AppEntry>) {
         allGrid.removeAllViews()
         firstGridRow = null
+        groupHeadings.clear()
+        groupFirstRows.clear()
+        rowGroup.clear()
         val groups = LinkedHashMap<String, ArrayList<View>>()
         for (g in GROUP_ORDER) groups[g] = ArrayList()
         for (app in visible.sortedBy { it.label.lowercase(Locale.UK) }) {
@@ -529,13 +548,18 @@ class MainActivity : Activity() {
         for ((title, views) in groups) {
             if (views.isEmpty()) continue
             val heading = if (title == hiddenTitle) "Hidden  ·  press OK on an app to bring it back" else title
-            allGrid.addView(text(heading, 15f, if (title == hiddenTitle) MUTED else TEXT, bold = true), fullWidth(if (allGrid.childCount == 0) 0 else dp(20)))
+            val headingView = text(heading, 15f, if (title == hiddenTitle) MUTED else TEXT, bold = true)
+            allGrid.addView(headingView, fullWidth(if (allGrid.childCount == 0) 0 else dp(20)))
+            val groupIndex = groupHeadings.size
+            groupHeadings.add(headingView)
             var gridRow: LinearLayout? = null
             views.forEachIndexed { i, v ->
                 if (i % 5 == 0) {
                     val r = row()
                     allGrid.addView(r, fullWidth(dp(10)))
                     if (firstGridRow == null) firstGridRow = r
+                    if (i == 0) groupFirstRows.add(r)
+                    rowGroup[r] = groupIndex
                     gridRow = r
                 }
                 gridRow?.addView(v, LinearLayout.LayoutParams(dp(ART_W), dp(ART_H)).also { it.marginEnd = dp(16) })
@@ -544,6 +568,14 @@ class MainActivity : Activity() {
     }
 
     private fun firstGridTile(): View? = firstGridRow?.getChildAt(0)
+
+    /** Moves to the first app of drawer group [index] and scrolls its heading into view. */
+    private fun jumpToGroup(index: Int) {
+        if (index < 0 || index >= groupFirstRows.size) return
+        groupFirstRows[index].getChildAt(0)?.requestFocus()
+        val heading = groupHeadings.getOrNull(index) ?: return
+        gridScroll.post { gridScroll.smoothScrollTo(0, (heading.top - dp(4)).coerceAtLeast(0)) }
+    }
 
     private fun openAllApps() {
         if (allPanel.visibility == View.VISIBLE) return
@@ -715,6 +747,15 @@ class MainActivity : Activity() {
     private fun showHubSettings() {
         val items = listOf<Pair<String, () -> Unit>>(
             "Theme  ·  ${currentTheme().name}" to { showThemeDialog() },
+            "Text size  ·  ${if (prefs.getBoolean("large_text", false)) "Large" else "Normal"}" to {
+                prefs.edit().putBoolean("large_text", !prefs.getBoolean("large_text", false)).apply()
+                rebuildScreen()
+            },
+            "Clock  ·  ${if (prefs.getBoolean("clock_24", true)) "24-hour" else "12-hour"}" to {
+                prefs.edit().putBoolean("clock_24", !prefs.getBoolean("clock_24", true)).apply()
+                updateClock()
+                buildRows()
+            },
             "Wallpaper  ·  ${wallpaperLabel()}" to { showWallpaperDialog() },
             "App pictures" to { showPicturesDialog() },
             "Kids time & PIN  ·  ${kidsSummary()}" to { showKidsDialog() },
@@ -753,6 +794,7 @@ class MainActivity : Activity() {
     }
 
     private fun applyTheme() {
+        textScale = if (prefs.getBoolean("large_text", false)) 1.18f else 1f
         val t = currentTheme()
         BG = Color.parseColor(t.bg)
         CARD = Color.parseColor(t.card)
@@ -1303,7 +1345,7 @@ class MainActivity : Activity() {
         val sameDay = then.get(Calendar.YEAR) == now.get(Calendar.YEAR) &&
             then.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR)
         return if (sameDay) {
-            "Last watched " + SimpleDateFormat("HH:mm", Locale.UK).format(Date(t))
+            "Last watched " + clockFormat().format(Date(t))
         } else {
             "Last watched " + SimpleDateFormat("EEEE", Locale.UK).format(Date(t))
         }
@@ -1571,9 +1613,12 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- clock and weather
 
+    private fun clockFormat(): SimpleDateFormat =
+        SimpleDateFormat(if (prefs.getBoolean("clock_24", true)) "HH:mm" else "h:mm a", Locale.UK)
+
     private fun updateClock() {
         val now = Date()
-        clockView.text = SimpleDateFormat("HH:mm", Locale.UK).format(now)
+        clockView.text = clockFormat().format(now)
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         val greeting = when {
             hour < 5 -> "Late night"
@@ -1877,7 +1922,7 @@ class MainActivity : Activity() {
     private fun text(s: String, sp: Float, color: Int, bold: Boolean = false, light: Boolean = false): TextView {
         val tv = TextView(this)
         tv.text = s
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp * textScale)
         tv.setTextColor(color)
         tv.typeface = when {
             bold -> Typeface.create("sans-serif", Typeface.BOLD)
