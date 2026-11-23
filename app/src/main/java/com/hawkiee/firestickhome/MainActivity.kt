@@ -7,10 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ActivityInfo
+import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -73,6 +75,28 @@ class MainActivity : Activity() {
             Wanted("Disney+", listOf("com.disney.disneyplus"), listOf("disney+"), loose = true),
         )
 
+        // App drawer groups, in the order they appear.
+        const val G_STREAM = "Streaming"
+        const val G_KIDS = "Kids"
+        const val G_MUSIC = "Music & audio"
+        const val G_GAMES = "Games"
+        const val G_TOOLS = "Tools & settings"
+        const val G_AMAZON = "Amazon"
+        const val G_OTHER = "Other"
+        val GROUP_ORDER = listOf(G_STREAM, G_KIDS, G_MUSIC, G_GAMES, G_TOOLS, G_AMAZON, G_OTHER)
+
+        // Matched against the app's name (lower case). First match wins, in the order of groupOf().
+        val KIDS_WORDS = listOf("kids", "cbeebies", "cbbc", "nick jr", "pbs kids")
+        val MUSIC_WORDS = listOf("spotify", "music", "audible", "bbc sounds", "tunein", "podcast", "deezer", "tidal", "radio")
+        val GAME_WORDS = listOf("luna", "game", "xbox", "geforce", "steam link", "arcade")
+        val STREAM_WORDS = listOf(
+            "netflix", "youtube", "prime video", "disney", "iplayer", "itvx", "channel 4", "my5", "apple tv",
+            "paramount", "plex", "pluto", "discovery", "britbox", "uktv", "jellyfin", "kodi", "stremio",
+            "twitch", "dazn", "tnt sports", "sky ", "rakuten", "mubi", "crunchyroll", "hayu", "freely", "vlc",
+            "mx player", "emby", "freevee", "tubi"
+        )
+        val TOOL_WORDS = listOf("downloader", "browser", "silk", "file", "vpn", "speed", "send files", "settings", "analiti")
+
         // Things that should never appear as a tile.
         val HIDDEN = setOf("com.amazon.tv.launcher")
 
@@ -98,6 +122,7 @@ class MainActivity : Activity() {
     private lateinit var allPanel: LinearLayout
     private lateinit var allGrid: LinearLayout
     private var allAppsTile: View? = null
+    private var firstGridRow: LinearLayout? = null
     private lateinit var homeColumn: LinearLayout
 
     private var lastWeatherFetch = 0L
@@ -222,7 +247,7 @@ class MainActivity : Activity() {
         allPanel.clipChildren = false
         val head = text("All apps", 22f, TEXT, bold = true)
         allPanel.addView(head)
-        allPanel.addView(text("A–Z  ·  Hold OK on an app to hide it  ·  Up or Back to close", 12f, MUTED), fullWidth(dp(2)))
+        allPanel.addView(text("Grouped, A–Z  ·  Hold OK on an app to hide it  ·  Up or Back to close", 12f, MUTED), fullWidth(dp(2)))
         allGrid = LinearLayout(this)
         allGrid.orientation = LinearLayout.VERTICAL
         allGrid.clipChildren = false
@@ -310,30 +335,39 @@ class MainActivity : Activity() {
             .filter { !HIDDEN.contains(it.pkg) && !hiddenByUser.contains(it.pkg) }
             .sortedBy { it.label.lowercase(Locale.UK) }
 
-        // The All apps grid, five per row.
+        // The drawer, grouped (Streaming, Kids, Music…), A–Z within each group, five per row.
         allGrid.removeAllViews()
-        val gridTiles = ArrayList<View>()
-        for (app in rest) gridTiles.add(appTile(app))
-        gridTiles.add(tile("Settings", null, CARD_DIM, TEXT, 14f) { openSettings() })
+        firstGridRow = null
+        val groups = LinkedHashMap<String, ArrayList<View>>()
+        for (g in GROUP_ORDER) groups[g] = ArrayList()
+        for (app in rest) groups.getValue(groupOf(app)).add(appTile(app))
+        val tools = groups.getValue(G_TOOLS)
+        tools.add(tile("Settings", null, CARD_DIM, TEXT, 14f) { openSettings() })
         if (hiddenByUser.isNotEmpty()) {
-            gridTiles.add(tile("Show hidden (${hiddenByUser.size})", null, CARD_DIM, MUTED, 14f) {
+            tools.add(tile("Show hidden (${hiddenByUser.size})", null, CARD_DIM, MUTED, 14f) {
                 prefs.edit().remove("hidden").apply()
                 buildRows()
             })
         }
-        var gridRow: LinearLayout? = null
-        gridTiles.forEachIndexed { i, v ->
-            if (i % 5 == 0) {
-                val r = row()
-                allGrid.addView(r, fullWidth(if (i == 0) 0 else dp(14)))
-                gridRow = r
+        for ((title, views) in groups) {
+            if (views.isEmpty()) continue
+            val heading = text(title, 15f, TEXT, bold = true)
+            allGrid.addView(heading, fullWidth(if (allGrid.childCount == 0) 0 else dp(22)))
+            var gridRow: LinearLayout? = null
+            views.forEachIndexed { i, v ->
+                if (i % 5 == 0) {
+                    val r = row()
+                    allGrid.addView(r, fullWidth(dp(10)))
+                    if (firstGridRow == null) firstGridRow = r
+                    gridRow = r
+                }
+                gridRow?.addView(v, LinearLayout.LayoutParams(0, dp(80), 1f).also { if (i % 5 != 4) it.marginEnd = dp(14) })
             }
-            gridRow?.addView(v, LinearLayout.LayoutParams(0, dp(88), 1f).also { if (i % 5 != 4) it.marginEnd = dp(14) })
-        }
-        val leftover = gridTiles.size % 5
-        if (leftover != 0) {
-            for (j in leftover until 5) {
-                gridRow?.addView(View(this), LinearLayout.LayoutParams(0, dp(88), 1f).also { if (j != 4) it.marginEnd = dp(14) })
+            val leftover = views.size % 5
+            if (leftover != 0) {
+                for (j in leftover until 5) {
+                    gridRow?.addView(View(this), LinearLayout.LayoutParams(0, dp(80), 1f).also { if (j != 4) it.marginEnd = dp(14) })
+                }
             }
         }
 
@@ -359,9 +393,27 @@ class MainActivity : Activity() {
         return view
     }
 
-    private fun firstGridTile(): View? {
-        val first = allGrid.getChildAt(0) as? LinearLayout ?: return null
-        return first.getChildAt(0)
+    private fun firstGridTile(): View? = firstGridRow?.getChildAt(0)
+
+    /** Which drawer group an app belongs in: by name first, then by the category the app declares. */
+    private fun groupOf(app: AppEntry): String {
+        val l = app.label.lowercase(Locale.UK).trim()
+        fun has(words: List<String>) = words.any { l.contains(it) }
+        if (has(KIDS_WORDS)) return G_KIDS
+        if (has(MUSIC_WORDS)) return G_MUSIC
+        if (has(GAME_WORDS)) return G_GAMES
+        if (l == "now" || l.startsWith("now ") || has(STREAM_WORDS)) return G_STREAM
+        if (has(TOOL_WORDS)) return G_TOOLS
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            when (app.info.applicationInfo.category) {
+                ApplicationInfo.CATEGORY_VIDEO -> return G_STREAM
+                ApplicationInfo.CATEGORY_AUDIO -> return G_MUSIC
+                ApplicationInfo.CATEGORY_GAME -> return G_GAMES
+                ApplicationInfo.CATEGORY_PRODUCTIVITY -> return G_TOOLS
+            }
+        }
+        if (app.pkg.startsWith("com.amazon.")) return G_AMAZON
+        return G_OTHER
     }
 
     private fun openAllApps() {
@@ -387,7 +439,7 @@ class MainActivity : Activity() {
             event.keyCode == KeyEvent.KEYCODE_DPAD_UP &&
             allPanel.visibility == View.VISIBLE
         ) {
-            val firstRow = allGrid.getChildAt(0)
+            val firstRow = firstGridRow
             val focused = currentFocus
             if (firstRow != null && focused != null && focused.parent == firstRow) {
                 closeAllApps()
