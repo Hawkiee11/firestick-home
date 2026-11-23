@@ -59,9 +59,9 @@ class MainActivity : Activity() {
     companion object {
         const val OWNER_NAME = "Sean"
 
-        // Stratford-upon-Avon
-        const val WEATHER_URL =
-            "https://api.open-meteo.com/v1/forecast?latitude=52.19&longitude=-1.71&current=temperature_2m,weather_code&timezone=Europe%2FLondon"
+        // Weather and place search: Open-Meteo, no account or key. The place is chosen on the TV.
+        const val WEATHER_URL = "https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code&timezone=auto"
+        const val GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search?count=6&language=en&format=json&name="
         const val WEATHER_REFRESH_MS = 30L * 60L * 1000L
 
         // In-app updates come from this repo's "latest" release (the repo must be public).
@@ -269,9 +269,10 @@ class MainActivity : Activity() {
         dateView = text("", 14f, MUTED)
         top.addView(dateView, margins(dp(14), 0, dp(14), 0))
 
-        weatherView = text("Stratford", 13f, TEXT)
+        // The weather pill: press OK on it to change the place.
+        weatherView = pill("Set weather location", CARD_DIM, TEXT) { showLocationDialog() }
         weatherView.background = rounded(CARD_DIM, false, 999)
-        weatherView.setPadding(dp(12), dp(6), dp(12), dp(6))
+        weatherView.setOnFocusChangeListener { v, hasFocus -> v.background = rounded(CARD_DIM, hasFocus, 999) }
         top.addView(weatherView)
 
         top.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
@@ -866,9 +867,18 @@ class MainActivity : Activity() {
 
     private fun fetchWeather() {
         lastWeatherFetch = System.currentTimeMillis()
+        val place = prefs.getString("loc_name", null)
+        val lat = prefs.getString("loc_lat", null)
+        val lon = prefs.getString("loc_lon", null)
+        if (place == null || lat == null || lon == null) {
+            weatherView.text = "Set weather location"
+            return
+        }
+        if (weatherView.text.toString().let { it.isBlank() || it == "Set weather location" }) weatherView.text = place
         Thread {
             try {
-                val conn = URL(WEATHER_URL).openConnection() as HttpURLConnection
+                val url = "$WEATHER_URL&latitude=$lat&longitude=$lon"
+                val conn = URL(url).openConnection() as HttpURLConnection
                 conn.connectTimeout = 8000
                 conn.readTimeout = 8000
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
@@ -876,11 +886,82 @@ class MainActivity : Activity() {
                 val current = JSONObject(body).getJSONObject("current")
                 val temp = Math.round(current.getDouble("temperature_2m"))
                 val code = current.getInt("weather_code")
-                val line = "Stratford  $temp°  " + describeWeather(code)
+                val line = "$place  $temp°  " + describeWeather(code)
                 main.post { weatherView.text = line }
             } catch (e: Exception) {
                 // No weather is fine; try again next refresh.
                 lastWeatherFetch = 0L
+            }
+        }.start()
+    }
+
+    /** Type a town, pick the right one from the matches, and the weather follows it. */
+    private fun showLocationDialog() {
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        input.setSingleLine(true)
+        input.hint = "Town or city"
+        val box = FrameLayout(this)
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle("Weather location")
+            .setView(box)
+            .setPositiveButton("Search") { _, _ ->
+                val q = input.text.toString().trim()
+                if (q.isNotEmpty()) searchPlaces(q)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+        input.requestFocus()
+    }
+
+    private fun searchPlaces(query: String) {
+        toast("Searching…")
+        Thread {
+            try {
+                val conn = URL(GEOCODE_URL + Uri.encode(query)).openConnection() as HttpURLConnection
+                conn.connectTimeout = 8000
+                conn.readTimeout = 8000
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val results = JSONObject(body).optJSONArray("results")
+                val names = ArrayList<String>()
+                val shortNames = ArrayList<String>()
+                val lats = ArrayList<Double>()
+                val lons = ArrayList<Double>()
+                if (results != null) {
+                    for (i in 0 until results.length()) {
+                        val r = results.getJSONObject(i)
+                        val name = r.optString("name")
+                        val parts = listOf(name, r.optString("admin1"), r.optString("country")).filter { it.isNotBlank() }
+                        names.add(parts.joinToString(", "))
+                        shortNames.add(name)
+                        lats.add(r.getDouble("latitude"))
+                        lons.add(r.getDouble("longitude"))
+                    }
+                }
+                main.post {
+                    if (names.isEmpty()) {
+                        toast("No places called \"$query\". Try another spelling.")
+                    } else {
+                        AlertDialog.Builder(this)
+                            .setTitle("Which one?")
+                            .setItems(names.toTypedArray()) { _, which ->
+                                prefs.edit()
+                                    .putString("loc_name", shortNames[which])
+                                    .putString("loc_lat", String.format(Locale.US, "%.4f", lats[which]))
+                                    .putString("loc_lon", String.format(Locale.US, "%.4f", lons[which]))
+                                    .apply()
+                                weatherView.text = shortNames[which]
+                                fetchWeather()
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                }
+            } catch (e: Exception) {
+                main.post { toast("Couldn't search right now. Check the internet and try again.") }
             }
         }.start()
     }
