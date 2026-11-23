@@ -29,6 +29,8 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.text.InputType
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -165,7 +167,10 @@ class MainActivity : Activity() {
                         }
                     }
                 }
-                PackageInstaller.STATUS_SUCCESS -> toast("Updated.")
+                PackageInstaller.STATUS_SUCCESS -> {
+                    toast("Installed.")
+                    buildRows()
+                }
                 else -> {
                     val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""
                     toast("The update didn't install. $msg")
@@ -275,6 +280,7 @@ class MainActivity : Activity() {
         updatePill.visibility = View.GONE
         top.addView(updatePill, margins(0, 0, dp(10), 0))
 
+        top.addView(pill("Add app", CARD, TEXT) { showAddAppDialog() }, margins(0, 0, dp(10), 0))
         top.addView(pill("Settings", CARD, TEXT) { openSettings() })
 
         column.addView(top, fullWidth(0))
@@ -744,9 +750,42 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    /** Downloads the new build and hands it to the system installer. */
+    /** Installs the newer build of Family Hub itself. */
     private fun installUpdate() {
         val url = updateUrl ?: return
+        installFromUrl(url, isUpdate = true)
+    }
+
+    /** Asks for a link to an APK, then downloads and installs it. */
+    private fun showAddAppDialog() {
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        input.setSingleLine(true)
+        input.setText(prefs.getString("last_add_url", "https://"))
+        input.setSelection(input.text.length)
+        val box = FrameLayout(this)
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle("Add an app")
+            .setMessage("Type or paste the link to the app's .apk file. Only use links you trust; Fire OS will ask before installing.")
+            .setView(box)
+            .setPositiveButton("Download and install") { _, _ ->
+                val url = input.text.toString().trim()
+                if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                    toast("That doesn't look like a link. It should start with https://")
+                } else {
+                    prefs.edit().putString("last_add_url", url).apply()
+                    installFromUrl(url, isUpdate = false)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+        input.requestFocus()
+    }
+
+    /** Downloads an APK and hands it to the system installer, which asks before installing. */
+    private fun installFromUrl(url: String, isUpdate: Boolean) {
         if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
             toast("Allow Family Hub to install apps: Settings › My Fire TV › Developer Options › Install unknown apps.")
             try {
@@ -759,7 +798,7 @@ class MainActivity : Activity() {
             }
             return
         }
-        updatePill.text = "Downloading…"
+        if (isUpdate) updatePill.text = "Downloading…" else toast("Downloading…")
         Thread {
             try {
                 val conn = URL(url).openConnection() as HttpURLConnection
@@ -772,7 +811,7 @@ class MainActivity : Activity() {
                 val sessionId = installer.createSession(params)
                 val session = installer.openSession(sessionId)
                 conn.inputStream.use { input ->
-                    session.openWrite("family-hub.apk", 0, -1).use { output ->
+                    session.openWrite("download.apk", 0, -1).use { output ->
                         input.copyTo(output)
                         session.fsync(output)
                     }
@@ -784,11 +823,15 @@ class MainActivity : Activity() {
                 val pending = PendingIntent.getBroadcast(this, sessionId, status, flags)
                 session.commit(pending.intentSender)
                 session.close()
-                main.post { updatePill.text = "Installing…" }
+                main.post { if (isUpdate) updatePill.text = "Installing…" else toast("Installing…") }
             } catch (e: Exception) {
                 main.post {
-                    updatePill.text = "Update ready"
-                    toast("Couldn't download the update. Try again in a minute.")
+                    if (isUpdate) {
+                        updatePill.text = "Update ready"
+                        toast("Couldn't download the update. Try again in a minute.")
+                    } else {
+                        toast("Couldn't download that link. Check it and try again.")
+                    }
                 }
             }
         }.start()

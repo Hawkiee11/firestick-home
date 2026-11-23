@@ -33,6 +33,7 @@
         android:banner="@drawable/banner"
         android:icon="@drawable/ic_launcher"
         android:label="Family Hub"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
 
         <activity
