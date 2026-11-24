@@ -1440,10 +1440,17 @@ class MainActivity : Activity() {
         val now = Calendar.getInstance()
         val sameDay = then.get(Calendar.YEAR) == now.get(Calendar.YEAR) &&
             then.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR)
+        // The verb fits the app: watched, played, listened, or just opened.
+        val verb = when (groupOf(app)) {
+            G_STREAM, G_KIDS -> "Last watched"
+            G_GAMES -> "Last played"
+            G_MUSIC -> "Last listened"
+            else -> "Last opened"
+        }
         return if (sameDay) {
-            "Last watched " + clockFormat().format(Date(t))
+            "$verb " + clockFormat().format(Date(t))
         } else {
-            "Last watched " + SimpleDateFormat("EEEE", Locale.UK).format(Date(t))
+            "$verb " + SimpleDateFormat("EEEE", Locale.UK).format(Date(t))
         }
     }
 
