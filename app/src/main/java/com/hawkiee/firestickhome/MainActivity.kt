@@ -141,6 +141,9 @@ class MainActivity : Activity() {
         val APPSTORE_PKGS = setOf("com.amazon.venezia", "com.amazon.tigris")
         const val TAKEOVER_PAUSE_MS = 10L * 60L * 1000L
 
+        // Never in Jump back in, whatever else: the screensaver and its relatives.
+        val JUMP_NEVER_WORDS = listOf("ambient", "screensaver", "screen saver", "daydream")
+
         // Things that should never appear as a tile.
         val HIDDEN = setOf("com.amazon.tv.launcher")
 
@@ -572,6 +575,7 @@ class MainActivity : Activity() {
                     for (pkg in recentPackages()) {
                         val app = apps[pkg] ?: continue
                         if (HIDDEN.contains(pkg) || hiddenByUser.contains(pkg)) continue
+                        if (!jumpEligible(app)) continue
                         recent.add(app)
                         if (recent.size == 3) break
                     }
@@ -665,6 +669,22 @@ class MainActivity : Activity() {
             if (c is ViewGroup && c.childCount > 0 && c.getChildAt(0).isFocusable) return c.getChildAt(0)
         }
         return null
+    }
+
+    /**
+     * Whether an app may appear in Jump back in. Not: the screensaver (Ambient Experience) and
+     * Amazon's other built-in system apps, unless they're something you watch, play or listen to
+     * (so Prime Video still counts); nor anything you've excluded from the hold-OK menu.
+     */
+    private fun jumpEligible(app: AppEntry): Boolean {
+        if ((prefs.getStringSet("jump_excluded", emptySet()) ?: emptySet()).contains(app.pkg)) return false
+        val l = app.label.lowercase(Locale.UK)
+        if (JUMP_NEVER_WORDS.any { l.contains(it) }) return false
+        if (isBuiltIn(app)) {
+            val g = groupOf(app)
+            return g == G_STREAM || g == G_KIDS || g == G_MUSIC || g == G_GAMES
+        }
+        return true
     }
 
     /** Which home row (0 = top) the view is in, or -1 if it isn't in one. */
@@ -818,6 +838,13 @@ class MainActivity : Activity() {
         }
         labels.add("Add to a new row…")
         actions.add { askRowName("New row", "") { name -> createCustomRow(name, app.pkg) } }
+        val excluded = (prefs.getStringSet("jump_excluded", emptySet()) ?: emptySet()).contains(app.pkg)
+        labels.add(if (excluded) "Allow in Jump back in" else "Don't show in Jump back in")
+        actions.add {
+            val next = HashSet(prefs.getStringSet("jump_excluded", emptySet()) ?: emptySet())
+            if (excluded) next.remove(app.pkg) else next.add(app.pkg)
+            prefs.edit().putStringSet("jump_excluded", next).apply()
+        }
         labels.add("Move to group…  (now: ${groupOf(app)})")
         actions.add { showGroupMenu(app) }
         // Amazon's built-in apps can't be uninstalled, only hidden, so only offer it for the rest.

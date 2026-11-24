@@ -3,8 +3,10 @@
 A simple home screen for a Fire TV Stick 4K Max (2nd gen, Fire OS 8). Few button presses for the things
 used most.
 
-- **Jump back in**: the last three apps you opened, whatever they are, newest first and already
-  selected. One press of OK gets you back in.
+- **Jump back in**: the last three apps you opened, newest first and already
+  selected. One press of OK gets you back in. The screensaver (Ambient Experience) and Amazon's other
+  built-in system apps never appear, unless they're for watching, playing or listening (Prime Video
+  does). Any app's hold-OK menu has "Don't show in Jump back in".
 - **Favourites**: up to five apps, in the order you choose.
 - **Games**: the Games group (emulators such as RetroArch and Lemuroid count). Hidden when there are none.
 - **Search** in the top bar: type part of an app's name, or search the Appstore.
