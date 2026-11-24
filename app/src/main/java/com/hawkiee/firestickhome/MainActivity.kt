@@ -1,7 +1,9 @@
 package com.hawkiee.firestickhome
 
 import android.app.Activity
-import android.app.AlertDialog
+import android.app.Dialog
+import android.graphics.drawable.ColorDrawable
+import android.view.WindowManager
 import android.app.AppOpsManager
 import android.app.AlarmManager
 import android.app.PendingIntent
@@ -694,7 +696,7 @@ class MainActivity : Activity() {
             toast("Hid ${app.label}. It's in the Hidden section at the bottom of All apps.")
         }
 
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle(if (isBuiltIn(app)) "${app.label}  ·  built in, can hide but not uninstall" else app.label)
             .setItems(labels.toTypedArray()) { _, which ->
                 actions[which]()
@@ -705,7 +707,7 @@ class MainActivity : Activity() {
     }
 
     private fun showGroupMenu(app: AppEntry) {
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Move ${app.label} to")
             .setItems(GROUP_ORDER.toTypedArray()) { _, which ->
                 prefs.edit().putString("group_${app.pkg}", GROUP_ORDER[which]).apply()
@@ -736,7 +738,7 @@ class MainActivity : Activity() {
             labels.add("Uninstall")
             actions.add { uninstall(app) }
         }
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle(if (isBuiltIn(app)) "${app.label}  ·  hidden, built in" else "${app.label}  ·  hidden")
             .setItems(labels.toTypedArray()) { _, which ->
                 actions[which]()
@@ -795,7 +797,7 @@ class MainActivity : Activity() {
             "Restart the Fire Stick" to { showRestartHelp() },
             "Fire TV settings" to { openSettings() },
         )
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Family Hub settings")
             .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
             .setNegativeButton("Close", null)
@@ -837,7 +839,7 @@ class MainActivity : Activity() {
     private fun showThemeDialog() {
         val names = THEMES.map { it.name }.toTypedArray()
         val current = THEMES.indexOf(currentTheme())
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Theme")
             .setSingleChoiceItems(names, current) { dialog, which ->
                 prefs.edit().putString("theme", THEMES[which].name).apply()
@@ -891,7 +893,7 @@ class MainActivity : Activity() {
         val options = arrayOf("Plain", "Soft glow", "Gradient", "Photo from a link…")
         val keys = arrayOf("plain", "glow", "gradient", "photo")
         val current = keys.indexOf(prefs.getString("wall", "plain")).coerceAtLeast(0)
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Wallpaper")
             .setSingleChoiceItems(options, current) { dialog, which ->
                 dialog.dismiss()
@@ -930,7 +932,7 @@ class MainActivity : Activity() {
         val labels = ArrayList<String>()
         labels.add("Reset all pictures")
         for (app in list) labels.add(if (artFile(app.pkg).exists()) "${app.label}  ·  custom" else app.label)
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("App pictures")
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which == 0) {
@@ -949,7 +951,7 @@ class MainActivity : Activity() {
     private fun showPictureOptions(app: AppEntry, backToList: Boolean) {
         val hasCustom = artFile(app.pkg).exists()
         val options = if (hasCustom) arrayOf("Use a picture from a link…", "Use the app's own picture") else arrayOf("Use a picture from a link…")
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle(app.label)
             .setItems(options) { _, which ->
                 if (which == 0) {
@@ -979,7 +981,7 @@ class MainActivity : Activity() {
         val box = FrameLayout(this)
         box.setPadding(dp(20), dp(8), dp(20), 0)
         box.addView(input)
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle(title)
             .setMessage(message)
             .setView(box)
@@ -1076,7 +1078,7 @@ class MainActivity : Activity() {
         val box = FrameLayout(this)
         box.setPadding(dp(20), dp(8), dp(20), 0)
         box.addView(input)
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Kids time: enter the PIN")
             .setView(box)
             .setPositiveButton("OK") { _, _ ->
@@ -1119,14 +1121,14 @@ class MainActivity : Activity() {
         // A dialog can show a message or a list, not both, so the explanation is its own item.
         val all = items + listOf<Pair<String, () -> Unit>>(
             "How kids time works" to {
-                AlertDialog.Builder(this)
+                HubDialog()
                     .setTitle("How kids time works")
                     .setMessage("In kids time the Kids row comes first. With the PIN lock on, anything outside the Kids group, the hold-OK menus and settings need the PIN. Outside kids time nothing is locked.")
                     .setPositiveButton("OK") { _, _ -> showKidsDialog() }
                     .show()
             }
         )
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Kids time & PIN")
             .setItems(all.map { it.first }.toTypedArray()) { _, which -> all[which].second() }
             .setNegativeButton("Done") { _, _ -> buildRows() }
@@ -1135,7 +1137,7 @@ class MainActivity : Activity() {
 
     private fun pickHour(title: String, current: Int, done: (Int) -> Unit) {
         val hours = (0..23).map { String.format(Locale.UK, "%02d:00", it) }.toTypedArray()
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle(title)
             .setSingleChoiceItems(hours, current) { dialog, which ->
                 dialog.dismiss()
@@ -1149,7 +1151,7 @@ class MainActivity : Activity() {
         val choices = intArrayOf(5, 15, 30, 60, 120)
         val labels = choices.map { "$it minutes" }.toTypedArray()
         val current = choices.indexOf(prefs.getInt("unlock_minutes", 30))
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Stay unlocked for")
             .setSingleChoiceItems(labels, current) { dialog, which ->
                 prefs.edit().putInt("unlock_minutes", choices[which]).apply()
@@ -1169,7 +1171,7 @@ class MainActivity : Activity() {
             val box = FrameLayout(this)
             box.setPadding(dp(20), dp(8), dp(20), 0)
             box.addView(input)
-            AlertDialog.Builder(this)
+            HubDialog()
                 .setTitle(title)
                 .setView(box)
                 .setPositiveButton("OK") { _, _ -> next(input.text.toString().trim()) }
@@ -1213,7 +1215,7 @@ class MainActivity : Activity() {
         val box = FrameLayout(this)
         box.setPadding(dp(20), dp(8), dp(20), 0)
         box.addView(input)
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Search")
             .setView(box)
             .setPositiveButton("Search") { _, _ ->
@@ -1234,7 +1236,7 @@ class MainActivity : Activity() {
         val labels = ArrayList<String>()
         for (m in matches) labels.add(if (hidden.contains(m.pkg)) m.label + "  ·  hidden" else m.label)
         labels.add("Search the Appstore for \"$q\"")
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle(if (matches.isEmpty()) "No installed apps match \"$q\"" else "Apps matching \"$q\"")
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which < matches.size) launch(matches[which].pkg) else searchAppstore(q)
@@ -1257,7 +1259,7 @@ class MainActivity : Activity() {
 
     /** An app can't restart the stick itself, so this gives the remote shortcut and Amazon's menu. */
     private fun showRestartHelp() {
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Restart the Fire Stick")
             .setMessage("Quickest: hold the middle Select button and Play/Pause together for about 5 seconds.\n\nOr in Fire TV settings: My Fire TV › Restart.")
             .setPositiveButton("Open Fire TV settings") { _, _ -> openSettings() }
@@ -1474,7 +1476,7 @@ class MainActivity : Activity() {
                         updatePill.text = "Update ready"
                         updatePill.visibility = View.VISIBLE
                         if (manual) {
-                            AlertDialog.Builder(this)
+                            HubDialog()
                                 .setTitle("Update available")
                                 .setMessage("Build $build is ready (you have build $mine). Install it now?")
                                 .setPositiveButton("Install") { _, _ -> installUpdate() }
@@ -1509,7 +1511,7 @@ class MainActivity : Activity() {
         val box = FrameLayout(this)
         box.setPadding(dp(20), dp(8), dp(20), 0)
         box.addView(input)
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Add an app")
             .setMessage("Type or paste the link to the app's .apk file. Only use links you trust; Fire OS will ask before installing.")
             .setView(box)
@@ -1682,7 +1684,7 @@ class MainActivity : Activity() {
         val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
         if (!dpm.isAdminActive(sleepAdmin())) {
             // Fire OS hides the approval screen (it opens blank), so this needs one ADB command. See README.
-            AlertDialog.Builder(this)
+            HubDialog()
                 .setTitle("Sleep timer")
                 .setMessage("Fire OS won't let the sleep timer be switched on from the TV. It needs a one-time setup from a computer (one command, in the README). After that it works from here.")
                 .setPositiveButton("OK", null)
@@ -1694,7 +1696,7 @@ class MainActivity : Activity() {
         val labels = ArrayList<String>()
         for (m in minutes) labels.add(if (m < 60) "$m minutes" else if (m == 60) "1 hour" else "${m / 60.0} hours".replace(".0", ""))
         if (active) labels.add("Turn the timer off")
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Switch the TV off in…")
             .setItems(labels.toTypedArray()) { _, which ->
                 val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -1785,7 +1787,7 @@ class MainActivity : Activity() {
         val box = FrameLayout(this)
         box.setPadding(dp(20), dp(8), dp(20), 0)
         box.addView(input)
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Who should it greet?")
             .setView(box)
             .setPositiveButton("Save") { _, _ ->
@@ -1806,7 +1808,7 @@ class MainActivity : Activity() {
         val box = FrameLayout(this)
         box.setPadding(dp(20), dp(8), dp(20), 0)
         box.addView(input)
-        AlertDialog.Builder(this)
+        HubDialog()
             .setTitle("Weather location")
             .setView(box)
             .setPositiveButton("Search") { _, _ ->
@@ -1847,7 +1849,7 @@ class MainActivity : Activity() {
                     if (names.isEmpty()) {
                         toast("No places called \"$query\". Try another spelling.")
                     } else {
-                        AlertDialog.Builder(this)
+                        HubDialog()
                             .setTitle("Which one?")
                             .setItems(names.toTypedArray()) { _, which ->
                                 prefs.edit()
@@ -2012,6 +2014,214 @@ class MainActivity : Activity() {
         box.tag = app.pkg
         makeTile(box, CARD, 16, { launch(app.pkg) }, { showAppMenu(app) })
         return box
+    }
+
+    // ---------------------------------------------------------------- Family Hub's own dialogs
+
+    /**
+     * A themed replacement for Android's stock dialog, with the same calls (setTitle, setItems,
+     * setSingleChoiceItems, setMessage, setView, setPositiveButton, setNegativeButton, show).
+     * Rounded card in the theme's colours, big rows with the focus ring, "label  ·  value" rows
+     * split into a label and a value on the right, styled text boxes and buttons.
+     */
+    inner class HubDialog {
+        private var title: String? = null
+        private var message: String? = null
+        private var items: Array<out CharSequence>? = null
+        private var checked = -1
+        private var onItem: ((HubDialog, Int) -> Unit)? = null
+        private var custom: View? = null
+        private var positive: Pair<String, ((HubDialog, Int) -> Unit)?>? = null
+        private var negative: Pair<String, ((HubDialog, Int) -> Unit)?>? = null
+        private var dialog: Dialog? = null
+
+        fun setTitle(t: CharSequence): HubDialog { title = t.toString(); return this }
+        fun setMessage(m: CharSequence): HubDialog { message = m.toString(); return this }
+        fun setView(v: View): HubDialog { custom = v; return this }
+
+        fun setItems(list: Array<out CharSequence>, listener: ((HubDialog, Int) -> Unit)?): HubDialog {
+            items = list
+            onItem = listener
+            return this
+        }
+
+        fun setSingleChoiceItems(list: Array<out CharSequence>, current: Int, listener: ((HubDialog, Int) -> Unit)?): HubDialog {
+            items = list
+            checked = current
+            onItem = listener
+            return this
+        }
+
+        fun setPositiveButton(label: CharSequence, listener: ((HubDialog, Int) -> Unit)?): HubDialog {
+            positive = Pair(label.toString(), listener)
+            return this
+        }
+
+        fun setNegativeButton(label: CharSequence, listener: ((HubDialog, Int) -> Unit)?): HubDialog {
+            negative = Pair(label.toString(), listener)
+            return this
+        }
+
+        fun dismiss() {
+            try {
+                dialog?.dismiss()
+            } catch (e: Exception) {
+                // Already gone.
+            }
+        }
+
+        fun show(): HubDialog {
+            val d = Dialog(this@MainActivity)
+            dialog = d
+            d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+
+            val card = LinearLayout(this@MainActivity)
+            card.orientation = LinearLayout.VERTICAL
+            card.setPadding(dp(28), dp(24), dp(28), dp(20))
+            card.background = rounded(BG, false, 24).also { it.setStroke(dp(1), CARD) }
+            card.clipChildren = false
+            card.clipToPadding = false
+
+            title?.let { card.addView(text(it, 20f, TEXT, bold = true), fullWidth(0)) }
+            message?.let {
+                val m = text(it, 14f, MUTED)
+                m.maxLines = 12
+                card.addView(m, fullWidth(dp(10)))
+            }
+            custom?.let { v ->
+                styleInputs(v)
+                (v.parent as? ViewGroup)?.removeView(v)
+                card.addView(v, fullWidth(dp(14)))
+            }
+
+            val list = items
+            var firstRow: View? = null
+            if (list != null) {
+                val rows = LinearLayout(this@MainActivity)
+                rows.orientation = LinearLayout.VERTICAL
+                rows.clipChildren = false
+                rows.clipToPadding = false
+                rows.setPadding(dp(4), dp(6), dp(4), dp(6))
+                list.forEachIndexed { i, label ->
+                    val r = row(label.toString(), i == checked) {
+                        dismiss()
+                        onItem?.invoke(this, i)
+                    }
+                    rows.addView(r, fullWidth(if (i == 0) 0 else dp(6)))
+                    if (firstRow == null || i == checked) firstRow = r
+                }
+                val scroll = ScrollView(this@MainActivity)
+                scroll.isVerticalScrollBarEnabled = false
+                scroll.clipChildren = false
+                scroll.clipToPadding = false
+                scroll.addView(rows)
+                // Long lists scroll inside the card instead of running off the screen.
+                val maxH = (resources.displayMetrics.heightPixels * 0.62f).toInt()
+                val wanted = list.size * dp(54)
+                card.addView(
+                    scroll,
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, if (wanted > maxH) maxH else ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .also { it.topMargin = dp(14) }
+                )
+            }
+
+            val pos = positive
+            val neg = negative
+            if (pos != null || neg != null) {
+                val buttons = LinearLayout(this@MainActivity)
+                buttons.orientation = LinearLayout.HORIZONTAL
+                buttons.gravity = Gravity.END
+                buttons.clipChildren = false
+                if (neg != null) {
+                    buttons.addView(button(neg.first, CARD, TEXT) { dismiss(); neg.second?.invoke(this, -2) }, margins(0, 0, dp(12), 0))
+                }
+                if (pos != null) {
+                    buttons.addView(button(pos.first, ACCENT, BG) { dismiss(); pos.second?.invoke(this, -1) })
+                }
+                card.addView(buttons, fullWidth(dp(18)))
+            }
+
+            d.setContentView(card)
+            d.window?.let { w ->
+                w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                w.setLayout(dp(620), ViewGroup.LayoutParams.WRAP_CONTENT)
+                w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                w.setDimAmount(0.6f)
+            }
+            d.show()
+            // Focus: a text box if there is one, else the ticked or first row.
+            val input = findInput(card)
+            if (input != null) input.requestFocus() else firstRow?.requestFocus()
+            return this
+        }
+
+        /** A list row. "Label  ·  value" puts the value on the right in a softer colour. */
+        private fun row(label: String, ticked: Boolean, onClick: () -> Unit): View {
+            val r = LinearLayout(this@MainActivity)
+            r.orientation = LinearLayout.HORIZONTAL
+            r.gravity = Gravity.CENTER_VERTICAL
+            r.setPadding(dp(18), dp(12), dp(18), dp(12))
+            r.isFocusable = true
+            r.isClickable = true
+            val idle = CARD_DIM
+            r.background = rounded(idle, false, 14)
+            r.setOnClickListener { onClick() }
+            r.setOnFocusChangeListener { v, has ->
+                v.background = rounded(if (has) CARD else idle, has, 14)
+                val sc = if (has) 1.02f else 1f
+                v.animate().scaleX(sc).scaleY(sc).setDuration(100L).start()
+            }
+            val parts = label.split("  ·  ", limit = 2)
+            val left = text(parts[0], 15f, TEXT, bold = ticked)
+            left.maxLines = 1
+            r.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (parts.size > 1) {
+                val right = text(parts[1], 13f, MUTED)
+                right.maxLines = 1
+                r.addView(right, margins(dp(12), 0, 0, 0))
+            }
+            if (ticked) {
+                val dot = View(this@MainActivity)
+                dot.background = GradientDrawable().also { it.shape = GradientDrawable.OVAL; it.setColor(ACCENT) }
+                r.addView(dot, LinearLayout.LayoutParams(dp(10), dp(10)).also { it.marginStart = dp(12) })
+            }
+            return r
+        }
+
+        private fun button(label: String, bg: Int, fg: Int, onClick: () -> Unit): View {
+            val b = text(label, 14f, fg, bold = true)
+            b.gravity = Gravity.CENTER
+            b.setPadding(dp(20), dp(10), dp(20), dp(10))
+            b.minWidth = dp(96)
+            b.isFocusable = true
+            b.isClickable = true
+            b.background = rounded(bg, false, 12)
+            b.setOnClickListener { onClick() }
+            b.setOnFocusChangeListener { v, has -> v.background = rounded(bg, has, 12) }
+            return b
+        }
+
+        private fun styleInputs(v: View) {
+            if (v is EditText) {
+                v.setTextColor(TEXT)
+                v.setHintTextColor(MUTED)
+                v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f * textScale)
+                v.background = rounded(CARD_DIM, false, 12)
+                v.setPadding(dp(16), dp(12), dp(16), dp(12))
+                v.setOnFocusChangeListener { x, has -> x.background = rounded(CARD_DIM, has, 12) }
+            }
+            if (v is ViewGroup) {
+                // The callers wrap the box in padding meant for the old dialog; the card has its own.
+                v.setPadding(0, 0, 0, 0)
+                for (i in 0 until v.childCount) styleInputs(v.getChildAt(i))
+            }
+        }
+
+        private fun findInput(v: View): EditText? {
+            if (v is EditText) return v
+            if (v is ViewGroup) for (i in 0 until v.childCount) findInput(v.getChildAt(i))?.let { return it }
+            return null
+        }
     }
 
     // ---------------------------------------------------------------- view helpers
