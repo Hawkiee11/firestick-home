@@ -49,7 +49,18 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
 import org.json.JSONObject
+import android.graphics.Canvas
+import android.util.Base64
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.util.zip.DeflaterOutputStream
+import java.util.zip.InflaterInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
@@ -62,6 +73,9 @@ import java.util.Locale
 
 /** An installed app we can open. */
 data class AppEntry(val pkg: String, val label: String, val info: ActivityInfo)
+
+/** A home-screen row you made yourself, like "Films". */
+data class CustomRow(val id: String, val name: String, val apps: List<String>)
 
 /** A colour theme for the whole screen. */
 data class HubTheme(
@@ -153,9 +167,21 @@ class MainActivity : Activity() {
         // App tiles are the same shape as the apps' TV banners (16:9), so the art fills them.
         const val ART_W = 156
         const val ART_H = 88
-        // Home rows (Favourites, Kids, Games): a little smaller so all four rows fit.
-        const val HOME_W = 128
-        const val HOME_H = 72
+        // Home row tile sizes (Settings › Look & layout › Tile size): width, height, tiles per row.
+        val TILE_SIZES = mapOf(
+            "small" to Triple(112, 63, 6),
+            "medium" to Triple(128, 72, 5),
+            "large" to Triple(160, 90, 4)
+        )
+
+        // Built-in home rows, in their default order. Rows you make get ids starting with "c".
+        val BUILTIN_ROWS = listOf("jump", "fav", "kids", "games")
+
+        // Accent colours you can pick instead of the theme's own.
+        val ACCENTS = listOf(
+            "Gold" to "#F3C98B", "Sky" to "#7FB2FF", "Mint" to "#7FD1C7", "Green" to "#9ED8A4",
+            "Pink" to "#F2A7C3", "Orange" to "#FFB36B", "Lilac" to "#C3A6FF", "Red" to "#FF7A7A"
+        )
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -176,12 +202,14 @@ class MainActivity : Activity() {
     private lateinit var sleepPill: TextView
     private lateinit var kidsPill: TextView
     private lateinit var jumpRow: LinearLayout
-    private lateinit var favSection: LinearLayout
-    private lateinit var favRow: LinearLayout
-    private lateinit var kidsSection: LinearLayout
-    private lateinit var kidsRow: LinearLayout
-    private lateinit var gamesSection: LinearLayout
-    private lateinit var gamesRow: LinearLayout
+    private lateinit var rowsColumn: LinearLayout
+    private lateinit var rowsScroll: ScrollView
+    private lateinit var backdropImage: ImageView
+    private lateinit var backdropFade: View
+    private var backdropPkg: String? = null
+    private var lastKidsFirst: Boolean? = null
+    // The rows on screen, top to bottom: (row id, the row of tiles).
+    private val homeRows = ArrayList<Pair<String, LinearLayout>>()
     private lateinit var allPanel: LinearLayout
     private lateinit var allGrid: LinearLayout
     private var firstGridRow: LinearLayout? = null
@@ -338,6 +366,21 @@ class MainActivity : Activity() {
         root.addView(wallpaperVeil, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         applyWallpaper()
 
+        // Backdrop: the app you're on, large, soft and faded across the top of the screen.
+        val backdropH = (resources.displayMetrics.heightPixels * 0.66f).toInt()
+        backdropImage = ImageView(this)
+        backdropImage.scaleType = ImageView.ScaleType.CENTER_CROP
+        backdropImage.alpha = 0f
+        root.addView(backdropImage, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, backdropH))
+        backdropFade = View(this)
+        backdropFade.background = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Color.argb(90, Color.red(BG), Color.green(BG), Color.blue(BG)), BG)
+        )
+        backdropFade.alpha = 0f
+        root.addView(backdropFade, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, backdropH))
+        backdropPkg = null
+
         val column = LinearLayout(this)
         homeColumn = column
         column.orientation = LinearLayout.VERTICAL
@@ -404,26 +447,21 @@ class MainActivity : Activity() {
 
         column.addView(top, fullWidth(0))
 
-        // Jump back in: the last three apps opened, whatever they are.
+        // The rows (Jump back in, Favourites, Kids, Games and your own), in the order you set.
+        // They scroll up and down if there are more than fit; never sideways.
         jumpRow = row()
-        column.addView(section("Jump back in", jumpRow), fullWidth(dp(8)))
-
-        // Favourites and Kids. Their order changes with the time of day (see orderRows).
-        favRow = row()
-        favSection = section("Favourites", favRow)
-        column.addView(favSection, fullWidth(dp(8)))
-
-        kidsRow = row()
-        kidsSection = section("Kids", kidsRow)
-        column.addView(kidsSection, fullWidth(dp(8)))
-
-        // Games: the Games group (emulators like RetroArch included). Hidden when there are none.
-        gamesRow = row()
-        gamesSection = section("Games", gamesRow)
-        column.addView(gamesSection, fullWidth(dp(8)))
-
-        // Push the drawer handle to the bottom of the screen.
-        column.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
+        rowsColumn = LinearLayout(this)
+        rowsColumn.orientation = LinearLayout.VERTICAL
+        rowsColumn.clipChildren = false
+        rowsColumn.clipToPadding = false
+        rowsColumn.setPadding(dp(6), dp(4), dp(6), dp(10))
+        rowsScroll = ScrollView(this)
+        rowsScroll.isVerticalScrollBarEnabled = false
+        rowsScroll.isFillViewport = true
+        rowsScroll.clipChildren = false
+        rowsScroll.clipToPadding = false
+        rowsScroll.addView(rowsColumn)
+        column.addView(rowsScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f).also { it.topMargin = dp(4) })
 
         // Drawer handle: landing on it (pressing down from the last row) slides the app drawer up.
         val handle = text("↓   All apps", 14f, MUTED, bold = true)
@@ -472,44 +510,67 @@ class MainActivity : Activity() {
         apps = installedApps()
         val hiddenByUser = hiddenSet()
         val visible = apps.values.filter { !HIDDEN.contains(it.pkg) && !hiddenByUser.contains(it.pkg) }
+        val byRecent = compareByDescending<AppEntry> { lastOpened(it) }.thenBy { it.label.lowercase(Locale.UK) }
+        val cap = tileSize().third
+        val favs = favourites().mapNotNull { apps[it] }.filter { !hiddenByUser.contains(it.pkg) }
 
-        // Jump back in: the last three apps opened, any app at all.
-        // Until there is any history, it shows the favourites instead.
-        jumpRow.removeAllViews()
-        val favs = favourites().mapNotNull { apps[it] }
-        val recent = ArrayList<AppEntry>()
-        for (pkg in recentPackages()) {
-            val app = apps[pkg] ?: continue
-            if (HIDDEN.contains(pkg) || hiddenByUser.contains(pkg)) continue
-            recent.add(app)
-            if (recent.size == 3) break
+        rowsColumn.removeAllViews()
+        homeRows.clear()
+
+        // Row order as you set it; in kids hours the Kids row moves above Favourites.
+        val order = rowOrder().toMutableList()
+        val kidsFirst = inKidsHours(Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
+        lastKidsFirst = kidsFirst
+        val fi = order.indexOf("fav")
+        val ki = order.indexOf("kids")
+        if (kidsFirst && fi >= 0 && ki > fi) {
+            order.removeAt(ki)
+            order.add(fi, "kids")
         }
-        for (app in favs) {
-            if (recent.size == 3) break
-            if (recent.none { it.pkg == app.pkg }) recent.add(app)
+        val hiddenRows = hiddenRowIds()
+        val customs = customRows().associateBy { it.id }
+
+        for (id in order) {
+            if (hiddenRows.contains(id)) continue
+            when (id) {
+                "jump" -> {
+                    // The last three apps opened, any app at all; until there's history, favourites.
+                    jumpRow = row()
+                    val recent = ArrayList<AppEntry>()
+                    for (pkg in recentPackages()) {
+                        val app = apps[pkg] ?: continue
+                        if (HIDDEN.contains(pkg) || hiddenByUser.contains(pkg)) continue
+                        recent.add(app)
+                        if (recent.size == 3) break
+                    }
+                    for (app in favs) {
+                        if (recent.size == 3) break
+                        if (recent.none { it.pkg == app.pkg }) recent.add(app)
+                    }
+                    recent.forEachIndexed { i, app ->
+                        val lp = LinearLayout.LayoutParams(0, dp(88), 1f)
+                        if (i < recent.size - 1) lp.marginEnd = dp(16)
+                        jumpRow.addView(jumpTile(app), lp)
+                    }
+                    addHomeRow(id, "Jump back in", jumpRow)
+                }
+                "fav" -> addHomeRow(id, "Favourites", artRow(favs.take(cap), "Hold OK on any app and choose \"Add to Favourites\""))
+                "kids" -> {
+                    val kids = visible.filter { groupOf(it) == G_KIDS }.sortedWith(byRecent)
+                    if (kids.isNotEmpty()) addHomeRow(id, "Kids", artRow(kids.take(cap), null))
+                }
+                "games" -> {
+                    val games = visible.filter { groupOf(it) == G_GAMES }.sortedWith(byRecent)
+                    if (games.isNotEmpty()) addHomeRow(id, "Games", artRow(games.take(cap), null))
+                }
+                else -> {
+                    val c = customs[id] ?: continue
+                    val list = c.apps.mapNotNull { apps[it] }.filter { !hiddenByUser.contains(it.pkg) }
+                    addHomeRow(id, c.name, artRow(list.take(cap), "Hold OK on any app and choose \"Add to ${c.name}\""))
+                }
+            }
         }
-        recent.forEachIndexed { i, app ->
-            val lp = LinearLayout.LayoutParams(0, dp(88), 1f)
-            if (i < recent.size - 1) lp.marginEnd = dp(16)
-            jumpRow.addView(jumpTile(app), lp)
-        }
 
-        // Favourites: up to five, in the order you set.
-        fillArtRow(favRow, favs.take(5), "Hold OK on any app and choose \"Add to Favourites\"")
-
-        // Kids: the apps in the Kids group, most recently used first.
-        val kids = visible.filter { groupOf(it) == G_KIDS }
-            .sortedWith(compareByDescending<AppEntry> { lastOpened(it) }.thenBy { it.label.lowercase(Locale.UK) })
-        fillArtRow(kidsRow, kids.take(5), null)
-        kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
-
-        // Games: the Games group, most recently played first.
-        val games = visible.filter { groupOf(it) == G_GAMES }
-            .sortedWith(compareByDescending<AppEntry> { lastOpened(it) }.thenBy { it.label.lowercase(Locale.UK) })
-        fillArtRow(gamesRow, games.take(5), null)
-        gamesSection.visibility = if (games.isEmpty()) View.GONE else View.VISIBLE
-
-        orderRows()
         val hiddenApps = apps.values
             .filter { hiddenByUser.contains(it.pkg) && !HIDDEN.contains(it.pkg) }
             .sortedBy { it.label.lowercase(Locale.UK) }
@@ -518,41 +579,65 @@ class MainActivity : Activity() {
         if (allPanel.visibility == View.VISIBLE) {
             firstGridTile()?.requestFocus()
         } else {
-            // Start on the most recently used app, so one press of OK gets you back in.
-            jumpRow.getChildAt(0)?.requestFocus()
+            // Start on the first tile (normally the most recently used app): one press of OK gets you back in.
+            firstHomeTile()?.requestFocus()
+            rowsScroll.scrollTo(0, 0)
         }
+    }
+
+    private fun addHomeRow(id: String, title: String, tiles: LinearLayout) {
+        rowsColumn.addView(section(title, tiles), fullWidth(if (rowsColumn.childCount == 0) 0 else dp(10)))
+        homeRows.add(Pair(id, tiles))
     }
 
     /** A row of banner tiles, left-aligned; [emptyHint] shows when there are none. */
-    private fun fillArtRow(r: LinearLayout, list: List<AppEntry>, emptyHint: String?) {
-        r.removeAllViews()
+    private fun artRow(list: List<AppEntry>, emptyHint: String?): LinearLayout {
+        val r = row()
         if (list.isEmpty() && emptyHint != null) {
-            r.addView(text(emptyHint, 13f, MUTED), margins(0, dp(8), 0, dp(8)))
-            return
+            r.addView(text(emptyHint, 13f, MUTED), margins(0, dp(6), 0, dp(6)))
+            return r
         }
+        val size = tileSize()
+        val names = prefs.getBoolean("tile_names", false)
         for (app in list) {
-            r.addView(artTile(app), LinearLayout.LayoutParams(dp(HOME_W), dp(HOME_H)).also { it.marginEnd = dp(16) })
+            val tile = artTile(app)
+            if (!names) {
+                r.addView(tile, LinearLayout.LayoutParams(dp(size.first), dp(size.second)).also { it.marginEnd = dp(16) })
+            } else {
+                // The name sits under the tile; only the tile takes focus.
+                val holder = LinearLayout(this)
+                holder.orientation = LinearLayout.VERTICAL
+                holder.clipChildren = false
+                holder.clipToPadding = false
+                holder.addView(tile, LinearLayout.LayoutParams(dp(size.first), dp(size.second)))
+                val label = text(app.label, 11f, MUTED)
+                label.maxLines = 1
+                label.gravity = Gravity.CENTER
+                holder.addView(label, LinearLayout.LayoutParams(dp(size.first), ViewGroup.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(6) })
+                r.addView(holder, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also { it.marginEnd = dp(16) })
+            }
         }
+        return r
     }
 
-    /** Kids above Favourites in the daytime, below in the evening. */
+    /** Rebuild if the hour has crossed into or out of kids hours (Kids row moves). */
     private fun orderRows() {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val kidsFirst = inKidsHours(hour)
-        val favIndex = homeColumn.indexOfChild(favSection)
-        val kidsIndex = homeColumn.indexOfChild(kidsSection)
-        val wantSwap = (kidsFirst && kidsIndex > favIndex) || (!kidsFirst && favIndex > kidsIndex)
-        if (!wantSwap) return
-        val first = minOf(favIndex, kidsIndex)
-        homeColumn.removeView(favSection)
-        homeColumn.removeView(kidsSection)
-        if (kidsFirst) {
-            homeColumn.addView(kidsSection, first, fullWidth(dp(8)))
-            homeColumn.addView(favSection, first + 1, fullWidth(dp(8)))
-        } else {
-            homeColumn.addView(favSection, first, fullWidth(dp(8)))
-            homeColumn.addView(kidsSection, first + 1, fullWidth(dp(8)))
+        val kidsFirst = inKidsHours(Calendar.getInstance().get(Calendar.HOUR_OF_DAY))
+        if (lastKidsFirst != null && lastKidsFirst != kidsFirst) buildRows()
+    }
+
+    private fun firstFocusable(r: LinearLayout): View? {
+        for (i in 0 until r.childCount) {
+            val c = r.getChildAt(i)
+            if (c.isFocusable) return c
+            if (c is ViewGroup && c.childCount > 0 && c.getChildAt(0).isFocusable) return c.getChildAt(0)
         }
+        return null
+    }
+
+    private fun firstHomeTile(): View? {
+        for ((_, r) in homeRows) firstFocusable(r)?.let { return it }
+        return null
     }
 
     /** The drawer: grouped (Streaming, Kids, Music…), A–Z within each group, five per row. */
@@ -628,19 +713,8 @@ class MainActivity : Activity() {
 
     /** The first tile of the lowest row on the home screen, where focus lands when the drawer closes. */
     private fun lastHomeTile(): View? {
-        val candidates = listOf(favSection, kidsSection, gamesSection)
-            .filter { it.visibility == View.VISIBLE }
-            .sortedByDescending { homeColumn.indexOfChild(it) }
-        for (s in candidates) {
-            val r = when (s) {
-                favSection -> favRow
-                kidsSection -> kidsRow
-                else -> gamesRow
-            }
-            val first = r.getChildAt(0)
-            if (first != null && first.isFocusable) return first
-        }
-        return jumpRow.getChildAt(0)
+        for ((_, r) in homeRows.reversed()) firstFocusable(r)?.let { return it }
+        return null
     }
 
     // ---------------------------------------------------------------- the hold-OK menu
@@ -680,10 +754,27 @@ class MainActivity : Activity() {
         } else {
             labels.add("Add to Favourites")
             actions.add {
-                if (favs.size >= 5) toast("Favourites holds five. Remove one first.")
+                val cap = tileSize().third
+                if (favs.size >= cap) toast("Favourites holds $cap at this tile size. Remove one first.")
                 else setFavourites(favs + app.pkg)
             }
         }
+        // Your own rows: add to / remove from each, or start a new one with this app.
+        for (c in customRows()) {
+            if (c.apps.contains(app.pkg)) {
+                labels.add("Remove from ${c.name}")
+                actions.add { updateCustomRow(c.id) { it.copy(apps = it.apps.filter { p -> p != app.pkg }) } }
+            } else {
+                labels.add("Add to ${c.name}")
+                actions.add {
+                    val cap = tileSize().third
+                    if (c.apps.size >= cap) toast("${c.name} holds $cap at this tile size. Remove one first.")
+                    else updateCustomRow(c.id) { it.copy(apps = it.apps + app.pkg) }
+                }
+            }
+        }
+        labels.add("Add to a new row…")
+        actions.add { askRowName("New row", "") { name -> createCustomRow(name, app.pkg) } }
         labels.add("Move to group…  (now: ${groupOf(app)})")
         actions.add { showGroupMenu(app) }
         // Amazon's built-in apps can't be uninstalled, only hidden, so only offer it for the rest.
@@ -780,22 +871,13 @@ class MainActivity : Activity() {
 
     private fun showHubSettings() {
         val items = listOf<Pair<String, () -> Unit>>(
-            "Theme  ·  ${currentTheme().name}" to { showThemeDialog() },
-            "Text size  ·  ${if (prefs.getBoolean("large_text", false)) "Large" else "Normal"}" to {
-                prefs.edit().putBoolean("large_text", !prefs.getBoolean("large_text", false)).apply()
-                rebuildScreen()
-            },
-            "Clock  ·  ${if (prefs.getBoolean("clock_24", true)) "24-hour" else "12-hour"}" to {
-                prefs.edit().putBoolean("clock_24", !prefs.getBoolean("clock_24", true)).apply()
-                updateClock()
-                buildRows()
-            },
-            "Wallpaper  ·  ${wallpaperLabel()}" to { showWallpaperDialog() },
-            "App pictures" to { showPicturesDialog() },
+            "Look & layout  ·  ${currentTheme().name}, ${tileSizeName()} tiles" to { showLookDialog() },
+            "Home rows  ·  ${homeRowsSummary()}" to { showRowsDialog() },
             "Kids time & PIN  ·  ${kidsSummary()}" to { showKidsDialog() },
             "Greeting name" to { showNameDialog() },
             "Weather location" to { showLocationDialog() },
             "Add an app from a link" to { showAddAppDialog() },
+            "Back up & restore" to { showBackupDialog() },
             "Open on Home button  ·  ${if (prefs.getBoolean("home_takeover", true)) "On" else "Off"}" to {
                 prefs.edit().putBoolean("home_takeover", !prefs.getBoolean("home_takeover", true)).apply()
                 toast(if (prefs.getBoolean("home_takeover", true)) "Home opens Family Hub." else "Home opens Amazon's home screen.")
@@ -809,6 +891,429 @@ class MainActivity : Activity() {
             .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    /** Theme, colours, wallpaper, backdrop, tiles, text and clock. Reopens after each change. */
+    private fun showLookDialog() {
+        val items = listOf<Pair<String, () -> Unit>>(
+            "Theme  ·  ${currentTheme().name}" to { showThemeDialog() },
+            "Accent colour  ·  ${accentName()}" to { showAccentDialog() },
+            "Wallpaper  ·  ${wallpaperLabel()}" to { showWallpaperDialog() },
+            "Backdrop  ·  ${if (prefs.getBoolean("backdrop", true)) "On" else "Off"}" to {
+                prefs.edit().putBoolean("backdrop", !prefs.getBoolean("backdrop", true)).apply()
+                rebuildScreen()
+                showLookDialog()
+            },
+            "Tile size  ·  ${tileSizeName()}" to { showTileSizeDialog() },
+            "Names under tiles  ·  ${if (prefs.getBoolean("tile_names", false)) "On" else "Off"}" to {
+                prefs.edit().putBoolean("tile_names", !prefs.getBoolean("tile_names", false)).apply()
+                buildRows()
+                showLookDialog()
+            },
+            "Text size  ·  ${if (prefs.getBoolean("large_text", false)) "Large" else "Normal"}" to {
+                prefs.edit().putBoolean("large_text", !prefs.getBoolean("large_text", false)).apply()
+                rebuildScreen()
+                showLookDialog()
+            },
+            "Clock  ·  ${if (prefs.getBoolean("clock_24", true)) "24-hour" else "12-hour"}" to {
+                prefs.edit().putBoolean("clock_24", !prefs.getBoolean("clock_24", true)).apply()
+                updateClock()
+                buildRows()
+                showLookDialog()
+            },
+            "App pictures" to { showPicturesDialog() },
+        )
+        HubDialog()
+            .setTitle("Look & layout")
+            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
+            .setNegativeButton("Back") { _, _ -> showHubSettings() }
+            .show()
+    }
+
+    // ---------------------------------------------------------------- tile size, accent, backdrop
+
+    private fun tileSizeKey(): String {
+        val k = prefs.getString("tile_size", "medium") ?: "medium"
+        return if (TILE_SIZES.containsKey(k)) k else "medium"
+    }
+
+    private fun tileSize(): Triple<Int, Int, Int> = TILE_SIZES.getValue(tileSizeKey())
+
+    private fun tileSizeName(): String = when (tileSizeKey()) {
+        "small" -> "Small"
+        "large" -> "Large"
+        else -> "Medium"
+    }
+
+    private fun showTileSizeDialog() {
+        val keys = arrayOf("small", "medium", "large")
+        val labels = arrayOf("Small  ·  6 per row", "Medium  ·  5 per row", "Large  ·  4 per row")
+        HubDialog()
+            .setTitle("Tile size")
+            .setSingleChoiceItems(labels, keys.indexOf(tileSizeKey())) { _, which ->
+                prefs.edit().putString("tile_size", keys[which]).apply()
+                buildRows()
+                showLookDialog()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun accentName(): String {
+        val hex = prefs.getString("accent", null) ?: return "Theme's own"
+        return ACCENTS.firstOrNull { it.second.equals(hex, ignoreCase = true) }?.first ?: "Custom"
+    }
+
+    private fun showAccentDialog() {
+        val labels = ArrayList<String>()
+        labels.add("Theme's own  ·  ${currentTheme().name}")
+        for ((name, _) in ACCENTS) labels.add(name)
+        val hex = prefs.getString("accent", null)
+        val current = if (hex == null) 0 else ACCENTS.indexOfFirst { it.second.equals(hex, ignoreCase = true) } + 1
+        HubDialog()
+            .setTitle("Accent colour")
+            .setSingleChoiceItems(labels.toTypedArray(), current) { _, which ->
+                if (which == 0) prefs.edit().remove("accent").apply()
+                else prefs.edit().putString("accent", ACCENTS[which - 1].second).apply()
+                rebuildScreen()
+                showLookDialog()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Shows the focused app's artwork, softened, behind the top of the screen. */
+    private fun onTileFocused(pkg: String) {
+        if (!prefs.getBoolean("backdrop", true)) return
+        if (allPanel.visibility == View.VISIBLE) return
+        if (pkg == backdropPkg) return
+        backdropPkg = pkg
+        val app = apps[pkg] ?: return
+        val art = bannerOf(app) ?: iconOf(app) ?: return
+        // Drawn tiny then stretched: a cheap, smooth blur that works on Fire OS's Android 11.
+        val soft = try {
+            val d = art.constantState?.newDrawable()?.mutate() ?: art
+            val bmp = Bitmap.createBitmap(48, 27, Bitmap.Config.ARGB_8888)
+            d.setBounds(0, 0, 48, 27)
+            d.draw(Canvas(bmp))
+            bmp
+        } catch (e: Exception) {
+            return
+        }
+        backdropImage.animate().cancel()
+        backdropImage.animate().alpha(0f).setDuration(110L).withEndAction {
+            backdropImage.setImageBitmap(soft)
+            backdropImage.animate().alpha(0.55f).setDuration(260L).start()
+        }.start()
+        backdropFade.alpha = 1f
+    }
+
+    // ---------------------------------------------------------------- home rows (order, show/hide, your own)
+
+    private fun customRows(): List<CustomRow> {
+        val raw = prefs.getString("custom_rows", null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            val out = ArrayList<CustomRow>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val a = o.optJSONArray("apps") ?: JSONArray()
+                val list = ArrayList<String>()
+                for (j in 0 until a.length()) list.add(a.getString(j))
+                out.add(CustomRow(o.getString("id"), o.getString("name"), list))
+            }
+            out
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveCustomRows(list: List<CustomRow>) {
+        val arr = JSONArray()
+        for (c in list) {
+            arr.put(JSONObject().put("id", c.id).put("name", c.name).put("apps", JSONArray(c.apps)))
+        }
+        prefs.edit().putString("custom_rows", arr.toString()).apply()
+    }
+
+    private fun updateCustomRow(id: String, change: (CustomRow) -> CustomRow) {
+        saveCustomRows(customRows().map { if (it.id == id) change(it) else it })
+    }
+
+    private fun createCustomRow(name: String, firstApp: String?) {
+        val id = "c" + System.currentTimeMillis()
+        saveCustomRows(customRows() + CustomRow(id, name, if (firstApp != null) listOf(firstApp) else emptyList()))
+        prefs.edit().putString("row_order", (rowOrder() + id).joinToString(",")).apply()
+        toast("Made the row \"$name\".")
+        buildRows()
+    }
+
+    /** Saved order, with any missing rows added at the end and deleted ones dropped. */
+    private fun rowOrder(): List<String> {
+        val all = BUILTIN_ROWS + customRows().map { it.id }
+        val saved = (prefs.getString("row_order", null) ?: "").split(",").filter { it.isNotBlank() && all.contains(it) }
+        return saved + all.filter { !saved.contains(it) }
+    }
+
+    private fun hiddenRowIds(): Set<String> = prefs.getStringSet("rows_hidden", emptySet()) ?: emptySet()
+
+    private fun rowTitle(id: String): String = when (id) {
+        "jump" -> "Jump back in"
+        "fav" -> "Favourites"
+        "kids" -> "Kids"
+        "games" -> "Games"
+        else -> customRows().firstOrNull { it.id == id }?.name ?: "Row"
+    }
+
+    private fun homeRowsSummary(): String {
+        val shown = rowOrder().count { !hiddenRowIds().contains(it) }
+        return "$shown shown"
+    }
+
+    private fun showRowsDialog() {
+        val order = rowOrder()
+        val hidden = hiddenRowIds()
+        val labels = ArrayList<String>()
+        for (id in order) labels.add(rowTitle(id) + "  ·  " + if (hidden.contains(id)) "Hidden" else "Shown")
+        labels.add("New row…")
+        HubDialog()
+            .setTitle("Home rows")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which == order.size) {
+                    askRowName("New row", "") { name ->
+                        createCustomRow(name, null)
+                        showRowsDialog()
+                    }
+                } else {
+                    showRowOptions(order[which])
+                }
+            }
+            .setNegativeButton("Back") { _, _ -> showHubSettings() }
+            .show()
+    }
+
+    private fun showRowOptions(id: String) {
+        val order = rowOrder().toMutableList()
+        val i = order.indexOf(id)
+        val hidden = hiddenRowIds()
+        val isCustom = !BUILTIN_ROWS.contains(id)
+        val labels = ArrayList<String>()
+        val actions = ArrayList<() -> Unit>()
+        labels.add(if (hidden.contains(id)) "Show this row" else "Hide this row")
+        actions.add {
+            val next = HashSet(hidden)
+            if (!next.remove(id)) next.add(id)
+            prefs.edit().putStringSet("rows_hidden", next).apply()
+        }
+        if (i > 0) {
+            labels.add("Move up")
+            actions.add {
+                order.removeAt(i)
+                order.add(i - 1, id)
+                prefs.edit().putString("row_order", order.joinToString(",")).apply()
+            }
+        }
+        if (i < order.size - 1) {
+            labels.add("Move down")
+            actions.add {
+                order.removeAt(i)
+                order.add(i + 1, id)
+                prefs.edit().putString("row_order", order.joinToString(",")).apply()
+            }
+        }
+        if (isCustom) {
+            labels.add("Rename")
+            actions.add {
+                askRowName("Rename row", rowTitle(id)) { name ->
+                    updateCustomRow(id) { it.copy(name = name) }
+                    buildRows()
+                    showRowsDialog()
+                }
+            }
+            labels.add("Delete this row")
+            actions.add {
+                saveCustomRows(customRows().filter { it.id != id })
+                prefs.edit().putString("row_order", order.filter { it != id }.joinToString(",")).apply()
+            }
+        }
+        HubDialog()
+            .setTitle(rowTitle(id))
+            .setItems(labels.toTypedArray()) { _, which ->
+                actions[which]()
+                buildRows()
+                // Rename asks for a name first and reopens the list itself.
+                if (!(isCustom && labels[which] == "Rename")) showRowsDialog()
+            }
+            .setNegativeButton("Back") { _, _ -> showRowsDialog() }
+            .show()
+    }
+
+    private fun askRowName(title: String, current: String, done: (String) -> Unit) {
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+        input.setSingleLine(true)
+        input.hint = "For example: Films, Sport, Dad's"
+        input.setText(current)
+        input.setSelection(input.text.length)
+        val box = FrameLayout(this)
+        box.addView(input)
+        HubDialog()
+            .setTitle(title)
+            .setView(box)
+            .setPositiveButton("Save") { _, _ ->
+                val name = input.text.toString().trim()
+                if (name.isEmpty()) toast("The row needs a name.") else done(name.take(24))
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------------------------------------------------------------- back up & restore
+
+    private fun showBackupDialog() {
+        val items = listOf<Pair<String, () -> Unit>>(
+            "Show backup QR code" to { showBackupQr() },
+            "Restore from a code" to { showRestoreDialog() },
+        )
+        HubDialog()
+            .setTitle("Back up & restore")
+            .setItems(items.map { it.first }.toTypedArray()) { _, which -> items[which].second() }
+            .setNegativeButton("Back") { _, _ -> showHubSettings() }
+            .show()
+    }
+
+    /** Every setting (not history or timers) as one compact code: "FH1:" + deflated, base64 JSON. */
+    private fun backupCode(): String {
+        val skip = setOf("sleep_at", "takeover_paused_until", "last_add_url")
+        val p = JSONObject()
+        for ((k, v) in prefs.all) {
+            if (k.startsWith("last_") || skip.contains(k)) continue
+            val e = JSONArray()
+            when (v) {
+                is String -> e.put("s").put(v)
+                is Boolean -> e.put("b").put(v)
+                is Int -> e.put("i").put(v)
+                is Long -> e.put("l").put(v)
+                is Float -> e.put("f").put(v.toDouble())
+                is Set<*> -> e.put("ss").put(JSONArray(v.map { it.toString() }))
+                else -> continue
+            }
+            p.put(k, e)
+        }
+        val json = JSONObject().put("v", 1).put("p", p).toString().toByteArray(Charsets.UTF_8)
+        val out = ByteArrayOutputStream()
+        DeflaterOutputStream(out).use { it.write(json) }
+        return "FH1:" + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
+    }
+
+    private fun qrBitmap(content: String, sizePx: Int): Bitmap? {
+        return try {
+            val hints = mapOf(EncodeHintType.MARGIN to 2, EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L)
+            val m = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, 0, 0, hints)
+            val scale = maxOf(1, sizePx / m.width)
+            val bmp = Bitmap.createBitmap(m.width * scale, m.height * scale, Bitmap.Config.ARGB_8888)
+            val c = Canvas(bmp)
+            c.drawColor(Color.WHITE)
+            val paint = android.graphics.Paint()
+            paint.color = Color.BLACK
+            for (y in 0 until m.height) for (x in 0 until m.width) {
+                if (m.get(x, y)) c.drawRect((x * scale).toFloat(), (y * scale).toFloat(), ((x + 1) * scale).toFloat(), ((y + 1) * scale).toFloat(), paint)
+            }
+            bmp
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun showBackupQr() {
+        val code = backupCode()
+        val bmp = qrBitmap(code, dp(300))
+        if (bmp == null) {
+            toast("Couldn't make the QR code.")
+            return
+        }
+        val img = ImageView(this)
+        img.setImageBitmap(bmp)
+        img.scaleType = ImageView.ScaleType.FIT_CENTER
+        val holder = LinearLayout(this)
+        holder.gravity = Gravity.CENTER_HORIZONTAL
+        holder.addView(img, LinearLayout.LayoutParams(dp(300), dp(300)))
+        HubDialog()
+            .setTitle("Backup code")
+            .setMessage("Scan this with your phone and keep the text it shows (Notes is fine). To restore: Settings › Back up & restore › Restore from a code, then paste it in with the Fire TV app's keyboard. Custom pictures and a photo wallpaper come back from their links.")
+            .setView(holder)
+            .setPositiveButton("Done", null)
+            .show()
+    }
+
+    private fun showRestoreDialog() {
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        input.setSingleLine(true)
+        input.hint = "Paste the code starting FH1:"
+        val box = FrameLayout(this)
+        box.addView(input)
+        HubDialog()
+            .setTitle("Restore from a code")
+            .setMessage("This replaces all of Family Hub's settings with the ones in the code.")
+            .setView(box)
+            .setPositiveButton("Restore") { _, _ ->
+                if (restoreFrom(input.text.toString())) {
+                    toast("Restored.")
+                    rebuildScreen()
+                    refetchPictures()
+                } else {
+                    toast("That code didn't work. Check it was copied in full, starting FH1:")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun restoreFrom(raw: String): Boolean {
+        return try {
+            val code = raw.trim()
+            if (!code.startsWith("FH1:")) return false
+            val bytes = Base64.decode(code.removePrefix("FH1:"), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+            val json = InflaterInputStream(ByteArrayInputStream(bytes)).use { it.readBytes() }.toString(Charsets.UTF_8)
+            val p = JSONObject(json).getJSONObject("p")
+            val ed = prefs.edit()
+            for (k in prefs.all.keys) if (!k.startsWith("last_")) ed.remove(k)
+            val keys = p.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val e = p.getJSONArray(k)
+                when (e.getString(0)) {
+                    "s" -> ed.putString(k, e.getString(1))
+                    "b" -> ed.putBoolean(k, e.getBoolean(1))
+                    "i" -> ed.putInt(k, e.getInt(1))
+                    "l" -> ed.putLong(k, e.getLong(1))
+                    "f" -> ed.putFloat(k, e.getDouble(1).toFloat())
+                    "ss" -> {
+                        val a = e.getJSONArray(1)
+                        val set = HashSet<String>()
+                        for (i in 0 until a.length()) set.add(a.getString(i))
+                        ed.putStringSet(k, set)
+                    }
+                }
+            }
+            ed.commit()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** After a restore: fetch custom pictures and a photo wallpaper again from their saved links. */
+    private fun refetchPictures() {
+        for ((k, v) in prefs.all) {
+            if (!k.startsWith("art_url_") || v !is String) continue
+            val pkg = k.removePrefix("art_url_")
+            saveImageFromLink(v, artFile(pkg), 640, 360, quiet = true) { ok -> if (ok) buildRows() }
+        }
+        val wallUrl = prefs.getString("wall_url", null)
+        if (prefs.getString("wall", "plain") == "photo" && wallUrl != null) {
+            saveImageFromLink(wallUrl, File(filesDir, "wallpaper.jpg"), 1920, 1080, quiet = true) { ok -> if (ok) rebuildScreen() }
+        }
     }
 
     /** Rebuilds the whole screen, after a theme or wallpaper change. */
@@ -841,6 +1346,14 @@ class MainActivity : Activity() {
         TEXT = Color.parseColor(t.text)
         MUTED = Color.parseColor(t.muted)
         ACCENT = Color.parseColor(t.accent)
+        val accent = prefs.getString("accent", null)
+        if (accent != null) {
+            try {
+                ACCENT = Color.parseColor(accent)
+            } catch (e: Exception) {
+                // Keep the theme's own.
+            }
+        }
     }
 
     private fun showThemeDialog() {
@@ -943,7 +1456,10 @@ class MainActivity : Activity() {
             .setTitle("App pictures")
             .setItems(labels.toTypedArray()) { _, which ->
                 if (which == 0) {
-                    for (app in list) artFile(app.pkg).delete()
+                    for (app in list) {
+                        artFile(app.pkg).delete()
+                        prefs.edit().remove("art_url_${app.pkg}").apply()
+                    }
                     toast("All apps are back to their own pictures.")
                     buildRows()
                 } else {
@@ -964,12 +1480,14 @@ class MainActivity : Activity() {
                 if (which == 0) {
                     askForLink("Picture for ${app.label}", "Link to a .jpg or .png. Wide (16:9) pictures fit best.", "art_url") { url ->
                         saveImageFromLink(url, artFile(app.pkg), 640, 360) { ok ->
+                            if (ok) prefs.edit().putString("art_url_${app.pkg}", url).apply()
                             buildRows()
                             if (ok && backToList) showPicturesDialog()
                         }
                     }
                 } else {
                     artFile(app.pkg).delete()
+                    prefs.edit().remove("art_url_${app.pkg}").apply()
                     buildRows()
                     if (backToList) showPicturesDialog()
                 }
@@ -1007,8 +1525,8 @@ class MainActivity : Activity() {
     }
 
     /** Downloads an image, shrinks it to fit [maxW]×[maxH], and saves it. */
-    private fun saveImageFromLink(url: String, target: File, maxW: Int, maxH: Int, done: (Boolean) -> Unit) {
-        toast("Downloading picture…")
+    private fun saveImageFromLink(url: String, target: File, maxW: Int, maxH: Int, quiet: Boolean = false, done: (Boolean) -> Unit) {
+        if (!quiet) toast("Downloading picture…")
         Thread {
             var ok = false
             try {
@@ -1037,7 +1555,7 @@ class MainActivity : Activity() {
             }
             val result = ok
             main.post {
-                if (!result) toast("Couldn't use that link. It needs to point straight at a .jpg or .png.")
+                if (!result && !quiet) toast("Couldn't use that link. It needs to point straight at a .jpg or .png.")
                 done(result)
             }
         }.start()
@@ -1939,6 +2457,7 @@ class MainActivity : Activity() {
             }
         }
         v.setOnFocusChangeListener { view, hasFocus ->
+            if (hasFocus) (view.tag as? String)?.let { onTileFocused(it) }
             view.background = rounded(bg, hasFocus, radiusDp)
             val scale = if (hasFocus) 1.08f else 1f
             view.animate().scaleX(scale).scaleY(scale).setDuration(120L).start()

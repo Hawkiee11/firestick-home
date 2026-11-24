@@ -29,21 +29,23 @@ used most.
 - Apps you installed in the last seven days get a **NEW** badge.
 
 - **Settings** in the top bar opens Family Hub settings:
-  - **Theme**: Navy, Midnight, Slate, Forest, Plum or Ember.
-  - **Text size**: Normal or Large.
-  - **Clock**: 24-hour or 12-hour.
-  - **Wallpaper**: Plain, Soft glow, Gradient, or a photo from a link (shown under a dark veil so text
-    stays readable).
-  - **App pictures**: one list of every app; pick one, give it a picture from a link, and the list comes
-    straight back for the next. "Reset all pictures" undoes them all. Also in each app's hold-OK menu.
+  - **Look & layout**: Theme (Navy, Midnight, Slate, Forest, Plum, Ember), Accent colour, Wallpaper
+    (Plain, Soft glow, Gradient, or a photo from a link), **Backdrop** (the app you're on, large and
+    softened across the top of the screen), **Tile size** (Small 6 / Medium 5 / Large 4 per row),
+    **Names under tiles**, Text size, Clock (12/24-hour), and App pictures (one list of every app; give
+    any of them a picture from a link).
+  - **Home rows**: show, hide and reorder Jump back in, Favourites, Kids, Games and **your own rows**
+    (make one here, or from any app's hold-OK menu with "Add to a new row…"; rename or delete them here).
+    Rows scroll up and down if there are more than fit; never sideways.
   - **Kids time & PIN**: set the hours (they can cross midnight), a 4–8 digit PIN, and how long the PIN
     unlocks for. In kids time the Kids row comes first; with the PIN lock on, opening anything outside
     the Kids group, the hold-OK menus and settings need the PIN. Outside kids time nothing is locked.
     (Amazon's own home screen isn't covered, so it's a nudge, not a wall.)
-  - Greeting name, Weather location, Add an app from a link, Restart the Fire Stick (shows the remote
-    shortcut; an app can't restart the stick itself), Fire TV settings.
-- In kids time the top bar shows **Kids time · locked**, or **Unlocked · 23m · Lock now** after the PIN;
-  OK on it unlocks or locks straight away.
+  - **Back up & restore**: shows every setting as a QR code. Scan it with a phone and keep the text; to
+    restore, paste it back in with the Fire TV app's keyboard. Custom pictures and a photo wallpaper come
+    back from their links.
+  - Greeting name, Weather location, Add an app from a link, Open on Home button, Check for updates,
+    Restart the Fire Stick (shows the remote shortcut), Fire TV settings.
 
 Every app tile shows the app's own 16:9 TV banner, or a picture you chose.
 

@@ -46,3 +46,8 @@ android {
         abortOnError = false
     }
 }
+
+dependencies {
+    // QR codes for Settings › Back up & restore.
+    implementation("com.google.zxing:core:3.5.3")
+}
