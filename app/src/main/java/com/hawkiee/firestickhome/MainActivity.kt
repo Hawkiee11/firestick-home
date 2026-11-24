@@ -40,6 +40,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.FocusFinder
 import android.view.ViewGroup
 import android.text.InputType
 import android.widget.EditText
@@ -331,6 +332,27 @@ class MainActivity : Activity() {
             val step = if (event.keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD) 1 else -1
             jumpToGroup((here + step).coerceIn(0, groupFirstRows.size - 1))
             return true
+        }
+        // The rows scroll when there are more than fit, and the scroll area would spend a press
+        // revealing the last few pixels before letting focus leave. Skip that at the two ends.
+        if (event.action == KeyEvent.ACTION_DOWN && allPanel.visibility != View.VISIBLE &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN || event.keyCode == KeyEvent.KEYCODE_DPAD_UP)
+        ) {
+            val idx = homeRowIndexOf(currentFocus)
+            if (idx >= 0) {
+                if (event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN && idx == homeRows.size - 1) {
+                    openAllApps()
+                    return true
+                }
+                if (event.keyCode == KeyEvent.KEYCODE_DPAD_UP && idx == 0) {
+                    val above = FocusFinder.getInstance().findNextFocus(homeColumn, currentFocus, View.FOCUS_UP)
+                    if (above != null && homeRowIndexOf(above) < 0) {
+                        rowsScroll.smoothScrollTo(0, 0)
+                        above.requestFocus()
+                        return true
+                    }
+                }
+            }
         }
         if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_MENU) {
             val pkg = currentFocus?.tag as? String
@@ -643,6 +665,17 @@ class MainActivity : Activity() {
             if (c is ViewGroup && c.childCount > 0 && c.getChildAt(0).isFocusable) return c.getChildAt(0)
         }
         return null
+    }
+
+    /** Which home row (0 = top) the view is in, or -1 if it isn't in one. */
+    private fun homeRowIndexOf(v: View?): Int {
+        var cur: View? = v
+        while (cur != null) {
+            val i = homeRows.indexOfFirst { it.second === cur }
+            if (i >= 0) return i
+            cur = cur.parent as? View
+        }
+        return -1
     }
 
     private fun firstHomeTile(): View? {
