@@ -762,6 +762,10 @@ class MainActivity : Activity() {
             "Greeting name" to { showNameDialog() },
             "Weather location" to { showLocationDialog() },
             "Add an app from a link" to { showAddAppDialog() },
+            "Open on Home button  ·  ${if (prefs.getBoolean("home_takeover", true)) "On" else "Off"}" to {
+                prefs.edit().putBoolean("home_takeover", !prefs.getBoolean("home_takeover", true)).apply()
+                toast(if (prefs.getBoolean("home_takeover", true)) "Home opens Family Hub." else "Home opens Amazon's home screen.")
+            },
             "Check for updates  ·  build ${installedVersion()}" to { checkForUpdate(manual = true) },
             "Restart the Fire Stick" to { showRestartHelp() },
             "Fire TV settings" to { openSettings() },

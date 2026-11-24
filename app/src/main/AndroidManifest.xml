@@ -78,5 +78,19 @@
         <receiver
             android:name=".SleepReceiver"
             android:exported="false" />
+
+        <!-- Brings Family Hub back when Amazon's home opens (start-up, Home button). Enabled over ADB. -->
+        <service
+            android:name=".HomeWatcher"
+            android:exported="false"
+            android:label="Family Hub: open on Home"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/home_watcher" />
+        </service>
     </application>
 </manifest>

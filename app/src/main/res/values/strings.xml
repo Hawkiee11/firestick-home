@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_watcher_description">Brings Family Hub back whenever Amazon\'s home screen opens: at start-up and when you press Home. It only watches which screen is open; it doesn\'t read what\'s on it.</string>
+</resources>

@@ -63,6 +63,27 @@ Once this version is installed, updates come from inside the app: **Update ready
 bar within a few hours of a new build (or straight away when you open Family Hub). The first time, Fire
 OS asks you to allow Family Hub to install apps (Developer Options → Install unknown apps → Family Hub).
 
+## One-time setup from a computer (ADB)
+
+Connect once (accept the "Allow USB debugging?" prompt on the TV):
+
+```
+adb connect <stick-ip>:5555
+```
+
+**Open on Home and at start-up** (Settings › "Open on Home button" turns it off again):
+
+```
+adb shell settings put secure enabled_accessibility_services com.hawkiee.firestickhome/com.hawkiee.firestickhome.HomeWatcher
+adb shell settings put secure accessibility_enabled 1
+```
+
+**Sleep timer:**
+
+```
+adb shell dpm set-active-admin com.hawkiee.firestickhome/.SleepAdmin
+```
+
 ## Optional: see apps opened from anywhere
 
 Out of the box, Jump back in only knows about apps opened from Family Hub. To include apps opened any
