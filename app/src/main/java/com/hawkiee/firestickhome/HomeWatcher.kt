@@ -17,6 +17,10 @@ class HomeWatcher : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         if (event.packageName?.toString() != AMAZON_HOME) return
+        // Only the main home page (HomeActivity_vNext). Amazon's search, Your Apps and other
+        // launcher pages are left alone so they still work.
+        val cls = event.className?.toString() ?: return
+        if (!cls.contains("HomeActivity")) return
         val prefs = getSharedPreferences("home", Context.MODE_PRIVATE)
         if (!prefs.getBoolean("home_takeover", true)) return
         val now = System.currentTimeMillis()

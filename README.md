@@ -6,6 +6,8 @@ used most.
 - **Jump back in**: the last three apps you opened, whatever they are, newest first and already
   selected. One press of OK gets you back in.
 - **Favourites**: up to five apps, in the order you choose.
+- **Games**: the Games group (emulators such as RetroArch and Lemuroid count). Hidden when there are none.
+- **Search** in the top bar: type part of an app's name, or search the Appstore.
 - **Kids**: the apps in the Kids group. In the daytime (6am–7pm) this row sits above Favourites.
 - **App drawer**: press down from the last row and every app slides up, grouped into Streaming, Kids,
   Music & audio, Games, Tools & settings, Amazon and Other (A–Z within each). Up from the top row, or

@@ -106,7 +106,10 @@ class MainActivity : Activity() {
         // Matched against the app's name (lower case). First match wins, in the order of groupOf().
         val KIDS_WORDS = listOf("kids", "cbeebies", "cbbc", "nick jr", "pbs kids", "disney+", "iplayer")
         val MUSIC_WORDS = listOf("spotify", "music", "audible", "bbc sounds", "tunein", "podcast", "deezer", "tidal", "radio")
-        val GAME_WORDS = listOf("luna", "game", "xbox", "geforce", "steam link", "arcade")
+        val GAME_WORDS = listOf(
+            "luna", "game", "xbox", "geforce", "steam link", "arcade", "retroarch", "lemuroid", "emulator",
+            "retro", "ppsspp", "dolphin", "duckstation", "flycast", "mupen", "snes", "mame", "moonlight"
+        )
         val STREAM_WORDS = listOf(
             "netflix", "youtube", "prime video", "disney", "iplayer", "itvx", "channel 4", "my5", "apple tv",
             "paramount", "plex", "pluto", "discovery", "britbox", "uktv", "jellyfin", "kodi", "stremio",
@@ -143,6 +146,9 @@ class MainActivity : Activity() {
         // App tiles are the same shape as the apps' TV banners (16:9), so the art fills them.
         const val ART_W = 156
         const val ART_H = 88
+        // Home rows (Favourites, Kids, Games): a little smaller so all four rows fit.
+        const val HOME_W = 128
+        const val HOME_H = 72
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -167,6 +173,8 @@ class MainActivity : Activity() {
     private lateinit var favRow: LinearLayout
     private lateinit var kidsSection: LinearLayout
     private lateinit var kidsRow: LinearLayout
+    private lateinit var gamesSection: LinearLayout
+    private lateinit var gamesRow: LinearLayout
     private lateinit var allPanel: LinearLayout
     private lateinit var allGrid: LinearLayout
     private var firstGridRow: LinearLayout? = null
@@ -326,7 +334,7 @@ class MainActivity : Activity() {
         column.orientation = LinearLayout.VERTICAL
         column.clipChildren = false
         column.clipToPadding = false
-        column.setPadding(dp(40), dp(22), dp(40), dp(14))
+        column.setPadding(dp(40), dp(18), dp(40), dp(8))
         root.addView(column, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         // Top bar: clock, date and greeting, weather, update, settings.
@@ -379,6 +387,8 @@ class MainActivity : Activity() {
         kidsPill.visibility = View.GONE
         top.addView(kidsPill, margins(0, 0, dp(10), 0))
 
+        top.addView(pill("Search", CARD, TEXT) { showSearch() }, margins(0, 0, dp(10), 0))
+
         sleepPill = pill("Sleep", CARD, TEXT) { showSleepDialog() }
         top.addView(sleepPill, margins(0, 0, dp(10), 0))
         top.addView(pill("Settings", CARD, TEXT) { requirePin { showHubSettings() } })
@@ -387,16 +397,21 @@ class MainActivity : Activity() {
 
         // Jump back in: the last three apps opened, whatever they are.
         jumpRow = row()
-        column.addView(section("Jump back in", jumpRow), fullWidth(dp(14)))
+        column.addView(section("Jump back in", jumpRow), fullWidth(dp(8)))
 
         // Favourites and Kids. Their order changes with the time of day (see orderRows).
         favRow = row()
         favSection = section("Favourites", favRow)
-        column.addView(favSection, fullWidth(dp(10)))
+        column.addView(favSection, fullWidth(dp(8)))
 
         kidsRow = row()
         kidsSection = section("Kids", kidsRow)
-        column.addView(kidsSection, fullWidth(dp(10)))
+        column.addView(kidsSection, fullWidth(dp(8)))
+
+        // Games: the Games group (emulators like RetroArch included). Hidden when there are none.
+        gamesRow = row()
+        gamesSection = section("Games", gamesRow)
+        column.addView(gamesSection, fullWidth(dp(8)))
 
         // Push the drawer handle to the bottom of the screen.
         column.addView(View(this), LinearLayout.LayoutParams(1, 0, 1f))
@@ -465,7 +480,7 @@ class MainActivity : Activity() {
             if (recent.none { it.pkg == app.pkg }) recent.add(app)
         }
         recent.forEachIndexed { i, app ->
-            val lp = LinearLayout.LayoutParams(0, dp(100), 1f)
+            val lp = LinearLayout.LayoutParams(0, dp(88), 1f)
             if (i < recent.size - 1) lp.marginEnd = dp(16)
             jumpRow.addView(jumpTile(app), lp)
         }
@@ -478,6 +493,12 @@ class MainActivity : Activity() {
             .sortedWith(compareByDescending<AppEntry> { lastOpened(it) }.thenBy { it.label.lowercase(Locale.UK) })
         fillArtRow(kidsRow, kids.take(5), null)
         kidsSection.visibility = if (kids.isEmpty()) View.GONE else View.VISIBLE
+
+        // Games: the Games group, most recently played first.
+        val games = visible.filter { groupOf(it) == G_GAMES }
+            .sortedWith(compareByDescending<AppEntry> { lastOpened(it) }.thenBy { it.label.lowercase(Locale.UK) })
+        fillArtRow(gamesRow, games.take(5), null)
+        gamesSection.visibility = if (games.isEmpty()) View.GONE else View.VISIBLE
 
         orderRows()
         val hiddenApps = apps.values
@@ -501,7 +522,7 @@ class MainActivity : Activity() {
             return
         }
         for (app in list) {
-            r.addView(artTile(app), LinearLayout.LayoutParams(dp(ART_W), dp(ART_H)).also { it.marginEnd = dp(16) })
+            r.addView(artTile(app), LinearLayout.LayoutParams(dp(HOME_W), dp(HOME_H)).also { it.marginEnd = dp(16) })
         }
     }
 
@@ -517,11 +538,11 @@ class MainActivity : Activity() {
         homeColumn.removeView(favSection)
         homeColumn.removeView(kidsSection)
         if (kidsFirst) {
-            homeColumn.addView(kidsSection, first, fullWidth(dp(10)))
-            homeColumn.addView(favSection, first + 1, fullWidth(dp(10)))
+            homeColumn.addView(kidsSection, first, fullWidth(dp(8)))
+            homeColumn.addView(favSection, first + 1, fullWidth(dp(8)))
         } else {
-            homeColumn.addView(favSection, first, fullWidth(dp(10)))
-            homeColumn.addView(kidsSection, first + 1, fullWidth(dp(10)))
+            homeColumn.addView(favSection, first, fullWidth(dp(8)))
+            homeColumn.addView(kidsSection, first + 1, fullWidth(dp(8)))
         }
     }
 
@@ -556,7 +577,7 @@ class MainActivity : Activity() {
             views.forEachIndexed { i, v ->
                 if (i % 5 == 0) {
                     val r = row()
-                    allGrid.addView(r, fullWidth(dp(10)))
+                    allGrid.addView(r, fullWidth(dp(8)))
                     if (firstGridRow == null) firstGridRow = r
                     if (i == 0) groupFirstRows.add(r)
                     rowGroup[r] = groupIndex
@@ -598,11 +619,15 @@ class MainActivity : Activity() {
 
     /** The first tile of the lowest row on the home screen, where focus lands when the drawer closes. */
     private fun lastHomeTile(): View? {
-        val candidates = listOf(favSection, kidsSection)
+        val candidates = listOf(favSection, kidsSection, gamesSection)
             .filter { it.visibility == View.VISIBLE }
             .sortedByDescending { homeColumn.indexOfChild(it) }
         for (s in candidates) {
-            val r = if (s == favSection) favRow else kidsRow
+            val r = when (s) {
+                favSection -> favRow
+                kidsSection -> kidsRow
+                else -> gamesRow
+            }
             val first = r.getChildAt(0)
             if (first != null && first.isFocusable) return first
         }
@@ -1177,6 +1202,57 @@ class MainActivity : Activity() {
         kidsPill.visibility = View.VISIBLE
         val left = unlockedUntil - System.currentTimeMillis()
         kidsPill.text = if (left > 0L) "Unlocked · " + ((left + 59_999L) / 60_000L) + "m  ·  Lock now" else "Kids time · locked"
+    }
+
+    /** Type part of an app's name; pick from the matches. Also offers the Appstore for new apps. */
+    private fun showSearch() {
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT
+        input.setSingleLine(true)
+        input.hint = "App name"
+        val box = FrameLayout(this)
+        box.setPadding(dp(20), dp(8), dp(20), 0)
+        box.addView(input)
+        AlertDialog.Builder(this)
+            .setTitle("Search")
+            .setView(box)
+            .setPositiveButton("Search") { _, _ ->
+                val q = input.text.toString().trim()
+                if (q.isNotEmpty()) showSearchResults(q)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+        input.requestFocus()
+    }
+
+    private fun showSearchResults(q: String) {
+        val needle = q.lowercase(Locale.UK)
+        val hidden = hiddenSet()
+        val matches = apps.values
+            .filter { !HIDDEN.contains(it.pkg) && it.label.lowercase(Locale.UK).contains(needle) }
+            .sortedBy { it.label.lowercase(Locale.UK) }
+        val labels = ArrayList<String>()
+        for (m in matches) labels.add(if (hidden.contains(m.pkg)) m.label + "  ·  hidden" else m.label)
+        labels.add("Search the Appstore for \"$q\"")
+        AlertDialog.Builder(this)
+            .setTitle(if (matches.isEmpty()) "No installed apps match \"$q\"" else "Apps matching \"$q\"")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which < matches.size) launch(matches[which].pkg) else searchAppstore(q)
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun searchAppstore(q: String) {
+        try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("amzn://apps/android?s=" + Uri.encode(q)))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (e: Exception) {
+            val store = apps["com.amazon.venezia"]
+            if (store != null) launch(store.pkg) else toast("Couldn't open the Appstore.")
+        }
     }
 
     /** An app can't restart the stick itself, so this gives the remote shortcut and Amazon's menu. */
@@ -1912,8 +1988,8 @@ class MainActivity : Activity() {
             img.scaleType = ImageView.ScaleType.CENTER_CROP
             img.clipToOutline = true
             img.background = rounded(Color.TRANSPARENT, false, 12)
-            // 94 dp tall inside the 100 dp tile, so 167 dp wide keeps it 16:9.
-            box.addView(img, LinearLayout.LayoutParams(dp(167), ViewGroup.LayoutParams.MATCH_PARENT))
+            // 82 dp tall inside the 88 dp tile, so 146 dp wide keeps it 16:9.
+            box.addView(img, LinearLayout.LayoutParams(dp(146), ViewGroup.LayoutParams.MATCH_PARENT))
         } else {
             val icon = iconOf(app)
             if (icon != null) {
@@ -1993,7 +2069,7 @@ class MainActivity : Activity() {
         s.orientation = LinearLayout.VERTICAL
         s.clipChildren = false
         s.clipToPadding = false
-        s.addView(text(title, 14f, TEXT, bold = true), margins(0, 0, 0, dp(6)))
+        s.addView(text(title, 13f, TEXT, bold = true), margins(0, 0, 0, dp(4)))
         s.addView(
             content,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
