@@ -120,6 +120,11 @@ class MainActivity : Activity() {
         )
         val TOOL_WORDS = listOf("downloader", "browser", "silk", "file", "vpn", "speed", "send files", "settings", "analiti")
 
+        // On Fire OS 8 the Appstore opens as a page of Amazon's home screen, so the Home takeover
+        // pauses while it's open (until Family Hub is back on screen, or 10 minutes).
+        val APPSTORE_PKGS = setOf("com.amazon.venezia", "com.amazon.tigris")
+        const val TAKEOVER_PAUSE_MS = 10L * 60L * 1000L
+
         // Things that should never appear as a tile.
         val HIDDEN = setOf("com.amazon.tv.launcher")
 
@@ -260,6 +265,8 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // Back on Family Hub: the Home takeover is on again.
+        prefs.edit().remove("takeover_paused_until").apply()
         allPanel.visibility = View.GONE
         homeColumn.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
         buildRows()
@@ -1246,6 +1253,7 @@ class MainActivity : Activity() {
     }
 
     private fun searchAppstore(q: String) {
+        pauseHomeTakeover()
         try {
             startActivity(
                 Intent(Intent.ACTION_VIEW, Uri.parse("amzn://apps/android?s=" + Uri.encode(q)))
@@ -1265,6 +1273,10 @@ class MainActivity : Activity() {
             .setPositiveButton("Open Fire TV settings") { _, _ -> openSettings() }
             .setNegativeButton("Close", null)
             .show()
+    }
+
+    private fun pauseHomeTakeover() {
+        prefs.edit().putLong("takeover_paused_until", System.currentTimeMillis() + TAKEOVER_PAUSE_MS).apply()
     }
 
     // ---------------------------------------------------------------- saved choices
@@ -1347,6 +1359,7 @@ class MainActivity : Activity() {
     }
 
     private fun launchNow(pkg: String) {
+        if (APPSTORE_PKGS.contains(pkg)) pauseHomeTakeover()
         val pm = packageManager
         val intent = pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg)
         if (intent == null) {

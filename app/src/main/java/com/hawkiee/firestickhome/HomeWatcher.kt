@@ -48,6 +48,12 @@ class HomeWatcher : AccessibilityService() {
         }
         if (!isHome) return
         val now = System.currentTimeMillis()
+        // Paused while the Appstore (a page of Amazon's home) is open from Family Hub.
+        val pausedUntil = getSharedPreferences("home", Context.MODE_PRIVATE).getLong("takeover_paused_until", 0L)
+        if (now < pausedUntil) {
+            Log.i(TAG, "paused for the Appstore: leaving Amazon's screen alone")
+            return
+        }
         if (now - lastLaunch < 800L) return
         lastLaunch = now
         Log.i(TAG, "Amazon home is showing: bringing Family Hub back")
