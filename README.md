@@ -31,7 +31,7 @@ used most.
 - **Settings** in the top bar opens Family Hub settings:
   - **Look & layout**: Theme (Navy, Midnight, Slate, Forest, Plum, Ember), Accent colour, Wallpaper
     (Plain, Soft glow, Gradient, or a photo from a link), **Backdrop** (the app you're on, large and
-    softened across the top of the screen), **Tile size** (Small 6 / Medium 5 / Large 4 per row),
+    softened across the top of the screen: Colour glow, the app's main colour as a see-through glow so a wallpaper still shows, which is the default; Artwork, its picture blurred; or Off), **Tile size** (Small 6 / Medium 5 / Large 4 per row),
     **Names under tiles**, Text size, Clock (12/24-hour), and App pictures (one list of every app; give
     any of them a picture from a link).
   - **Home rows**: show, hide and reorder Jump back in, Favourites, Kids, Games and **your own rows**

@@ -52,6 +52,7 @@ import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 import android.graphics.Canvas
+import android.animation.ValueAnimator
 import android.util.Base64
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
@@ -206,6 +207,9 @@ class MainActivity : Activity() {
     private lateinit var rowsScroll: ScrollView
     private lateinit var backdropImage: ImageView
     private lateinit var backdropFade: View
+    private lateinit var glowView: View
+    private var glowColor = Color.TRANSPARENT
+    private var glowAnim: ValueAnimator? = null
     private var backdropPkg: String? = null
     private var lastKidsFirst: Boolean? = null
     // The rows on screen, top to bottom: (row id, the row of tiles).
@@ -366,7 +370,13 @@ class MainActivity : Activity() {
         root.addView(wallpaperVeil, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         applyWallpaper()
 
-        // Backdrop: the app you're on, large, soft and faded across the top of the screen.
+        // Colour glow: the main colour of the app you're on, as a see-through glow across the top.
+        // See-through on purpose, so a wallpaper photo still shows underneath.
+        glowView = View(this)
+        glowColor = Color.TRANSPARENT
+        root.addView(glowView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // Artwork backdrop: the app you're on, large, blurred and faded across the top of the screen.
         val backdropH = (resources.displayMetrics.heightPixels * 0.66f).toInt()
         backdropImage = ImageView(this)
         backdropImage.scaleType = ImageView.ScaleType.CENTER_CROP
@@ -899,11 +909,7 @@ class MainActivity : Activity() {
             "Theme  ·  ${currentTheme().name}" to { showThemeDialog() },
             "Accent colour  ·  ${accentName()}" to { showAccentDialog() },
             "Wallpaper  ·  ${wallpaperLabel()}" to { showWallpaperDialog() },
-            "Backdrop  ·  ${if (prefs.getBoolean("backdrop", true)) "On" else "Off"}" to {
-                prefs.edit().putBoolean("backdrop", !prefs.getBoolean("backdrop", true)).apply()
-                rebuildScreen()
-                showLookDialog()
-            },
+            "Backdrop  ·  ${backdropModeName()}" to { showBackdropDialog() },
             "Tile size  ·  ${tileSizeName()}" to { showTileSizeDialog() },
             "Names under tiles  ·  ${if (prefs.getBoolean("tile_names", false)) "On" else "Off"}" to {
                 prefs.edit().putBoolean("tile_names", !prefs.getBoolean("tile_names", false)).apply()
@@ -982,30 +988,164 @@ class MainActivity : Activity() {
             .show()
     }
 
-    /** Shows the focused app's artwork, softened, behind the top of the screen. */
+    /** "glow" (default), "art" or "off". Older builds stored an on/off switch. */
+    private fun backdropMode(): String {
+        val m = prefs.getString("backdrop_mode", null)
+        if (m == "glow" || m == "art" || m == "off") return m
+        return if (prefs.getBoolean("backdrop", true)) "glow" else "off"
+    }
+
+    private fun backdropModeName(): String = when (backdropMode()) {
+        "art" -> "Artwork"
+        "off" -> "Off"
+        else -> "Colour glow"
+    }
+
+    private fun showBackdropDialog() {
+        val keys = arrayOf("glow", "art", "off")
+        val labels = arrayOf(
+            "Colour glow  ·  see-through, wallpaper still shows",
+            "Artwork  ·  the app's picture, blurred",
+            "Off"
+        )
+        HubDialog()
+            .setTitle("Backdrop")
+            .setSingleChoiceItems(labels, keys.indexOf(backdropMode())) { _, which ->
+                prefs.edit().putString("backdrop_mode", keys[which]).apply()
+                rebuildScreen()
+                showLookDialog()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Behind the top of the screen: the focused app's colour (glow) or its blurred artwork. */
     private fun onTileFocused(pkg: String) {
-        if (!prefs.getBoolean("backdrop", true)) return
+        val mode = backdropMode()
+        if (mode == "off") return
         if (allPanel.visibility == View.VISIBLE) return
         if (pkg == backdropPkg) return
         backdropPkg = pkg
         val app = apps[pkg] ?: return
         val art = bannerOf(app) ?: iconOf(app) ?: return
-        // Drawn tiny then stretched: a cheap, smooth blur that works on Fire OS's Android 11.
-        val soft = try {
-            val d = art.constantState?.newDrawable()?.mutate() ?: art
-            val bmp = Bitmap.createBitmap(48, 27, Bitmap.Config.ARGB_8888)
-            d.setBounds(0, 0, 48, 27)
+        if (mode == "glow") {
+            fadeGlowTo(mainColour(art))
+        } else {
+            val soft = blurred(art) ?: return
+            backdropImage.animate().cancel()
+            backdropImage.animate().alpha(0f).setDuration(110L).withEndAction {
+                backdropImage.setImageBitmap(soft)
+                backdropImage.animate().alpha(0.6f).setDuration(260L).start()
+            }.start()
+            backdropFade.alpha = 1f
+        }
+    }
+
+    /** Draws a drawable into a bitmap of the given size. */
+    private fun render(d0: Drawable, w: Int, h: Int): Bitmap? {
+        return try {
+            val d = d0.constantState?.newDrawable()?.mutate() ?: d0
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            d.setBounds(0, 0, w, h)
             d.draw(Canvas(bmp))
             bmp
         } catch (e: Exception) {
-            return
+            null
         }
-        backdropImage.animate().cancel()
-        backdropImage.animate().alpha(0f).setDuration(110L).withEndAction {
-            backdropImage.setImageBitmap(soft)
-            backdropImage.animate().alpha(0.55f).setDuration(260L).start()
-        }.start()
-        backdropFade.alpha = 1f
+    }
+
+    /**
+     * The colour that best represents the artwork: an average of its colourful pixels (greys,
+     * near-white and near-black skipped), made a little richer so it glows. Accent if it's all grey.
+     */
+    private fun mainColour(d: Drawable): Int {
+        val bmp = render(d, 32, 18) ?: return ACCENT
+        var r = 0L
+        var g = 0L
+        var b = 0L
+        var weight = 0L
+        val hsv = FloatArray(3)
+        for (y in 0 until bmp.height) for (x in 0 until bmp.width) {
+            val c = bmp.getPixel(x, y)
+            if (Color.alpha(c) < 128) continue
+            Color.colorToHSV(c, hsv)
+            if (hsv[1] < 0.25f || hsv[2] < 0.18f || hsv[2] > 0.97f && hsv[1] < 0.35f) continue
+            val w = (hsv[1] * 100).toLong() + 1
+            r += Color.red(c) * w
+            g += Color.green(c) * w
+            b += Color.blue(c) * w
+            weight += w
+        }
+        if (weight == 0L) return ACCENT
+        val avg = Color.rgb((r / weight).toInt(), (g / weight).toInt(), (b / weight).toInt())
+        Color.colorToHSV(avg, hsv)
+        hsv[1] = (hsv[1] * 1.25f).coerceIn(0.35f, 0.9f)
+        hsv[2] = hsv[2].coerceIn(0.55f, 0.85f)
+        return Color.HSVToColor(hsv)
+    }
+
+    /** Smoothly changes the glow to [target]. */
+    private fun fadeGlowTo(target: Int) {
+        glowAnim?.cancel()
+        val from = glowColor
+        val anim = ValueAnimator.ofArgb(from, target)
+        anim.duration = 450L
+        anim.addUpdateListener { a ->
+            val c = a.animatedValue as Int
+            glowColor = c
+            val g = GradientDrawable()
+            g.gradientType = GradientDrawable.RADIAL_GRADIENT
+            g.colors = intArrayOf(Color.argb(150, Color.red(c), Color.green(c), Color.blue(c)), Color.TRANSPARENT)
+            g.setGradientCenter(0.3f, 0.0f)
+            g.gradientRadius = resources.displayMetrics.widthPixels * 0.85f
+            glowView.background = g
+        }
+        glowAnim = anim
+        anim.start()
+    }
+
+    /** A properly smooth blur: shrink to 96×54, three box-blur passes, then let the view scale it up. */
+    private fun blurred(d: Drawable): Bitmap? {
+        val bmp = render(d, 96, 54) ?: return null
+        val w = bmp.width
+        val h = bmp.height
+        var px = IntArray(w * h)
+        bmp.getPixels(px, 0, w, 0, 0, w, h)
+        val radius = 4
+        repeat(3) {
+            px = boxBlur(px, w, h, radius, true)
+            px = boxBlur(px, w, h, radius, false)
+        }
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        out.setPixels(px, 0, w, 0, 0, w, h)
+        return out
+    }
+
+    private fun boxBlur(src: IntArray, w: Int, h: Int, r: Int, horizontal: Boolean): IntArray {
+        val out = IntArray(src.size)
+        val lines = if (horizontal) h else w
+        val len = if (horizontal) w else h
+        for (line in 0 until lines) {
+            for (i in 0 until len) {
+                var a = 0
+                var rr = 0
+                var gg = 0
+                var bb = 0
+                var n = 0
+                for (k in -r..r) {
+                    val j = (i + k).coerceIn(0, len - 1)
+                    val c = if (horizontal) src[line * w + j] else src[j * w + line]
+                    a += (c ushr 24) and 0xff
+                    rr += (c shr 16) and 0xff
+                    gg += (c shr 8) and 0xff
+                    bb += c and 0xff
+                    n++
+                }
+                val idx = if (horizontal) line * w + i else i * w + line
+                out[idx] = ((a / n) shl 24) or ((rr / n) shl 16) or ((gg / n) shl 8) or (bb / n)
+            }
+        }
+        return out
     }
 
     // ---------------------------------------------------------------- home rows (order, show/hide, your own)
